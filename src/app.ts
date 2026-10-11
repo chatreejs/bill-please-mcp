@@ -4,11 +4,13 @@ import { rateLimit } from 'elysia-rate-limit';
 
 import type { Config } from './config.ts';
 import { mcpRoutes } from './mcp/route.ts';
+import { clientIp, requestLogger } from './request-logger.ts';
 import { receiptRoutes } from './routes/receipts.ts';
 import type { ReceiptScanner } from './scanners/index.ts';
 
 export const createApp = (config: Config, scanner: ReceiptScanner) =>
   new Elysia()
+    .use(requestLogger(config))
     .use(cors({ origin: config.corsOrigins }))
     .get('/health', () => ({ status: 'ok' }))
     .use(
@@ -16,12 +18,7 @@ export const createApp = (config: Config, scanner: ReceiptScanner) =>
         duration: 60_000,
         max: config.rateLimitPerMinute,
         skip: (request) => new URL(request.url).pathname === '/health',
-        generator: (request, server) =>
-          (config.trustProxy
-            ? request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-            : undefined) ??
-          server?.requestIP(request)?.address ??
-          '',
+        generator: (request, server) => clientIp(request, server, config.trustProxy),
       }),
     )
     .use(receiptRoutes(config, scanner))

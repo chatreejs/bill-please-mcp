@@ -1,13 +1,27 @@
-import { describe, expect, it } from 'bun:test';
+import { beforeEach, describe, expect, it } from 'bun:test';
 
 import { createApp } from '../src/app.ts';
 import { config } from '../src/config.ts';
+import { configureLogger } from '../src/logger.ts';
 import { MockReceiptScanner } from '../src/scanners/mock.ts';
 import type { ReceiptScanner } from '../src/scanners/index.ts';
 
 const testConfig = { ...config, rateLimitPerMinute: 1000, maxImageBytes: 1024 };
 const app = createApp(testConfig, new MockReceiptScanner(0, 0));
 const png = new File([new Uint8Array([137, 80, 78, 71])], 'bill.png', { type: 'image/png' });
+
+// Capture log output instead of printing it
+let logs: string[] = [];
+beforeEach(() => {
+  logs = [];
+  configureLogger({ level: 'INFO', color: false, write: (line) => logs.push(line) });
+});
+
+// The access log is written after the response has been sent
+const waitForLog = async (pattern: RegExp) => {
+  for (let i = 0; i < 50 && !logs.some((line) => pattern.test(line)); i++) await Bun.sleep(1);
+  return logs.find((line) => pattern.test(line));
+};
 
 const scan = (file: File, target = app) => {
   const form = new FormData();
@@ -53,6 +67,43 @@ describe('REST /api/receipts/scan', () => {
     };
     const res = await scan(png, createApp(testConfig, broken));
     expect(res.status).toBe(502);
+  });
+});
+
+describe('request logging', () => {
+  it('assigns a request id and writes an access log line', async () => {
+    const res = await scan(png);
+    const requestId = res.headers.get('x-request-id');
+    expect(requestId).toMatch(/^[0-9a-f]{8}$/);
+
+    const line = await waitForLog(new RegExp(`\\[${requestId}\\] http\\.access`));
+    expect(line).toContain('POST /api/receipts/scan 200');
+    expect(logs.some((l) => l.includes(`[${requestId}] receipts.route`))).toBe(true);
+  });
+
+  it('reuses a valid incoming X-Request-Id', async () => {
+    const res = await app.handle(
+      new Request('http://localhost/health', { headers: { 'x-request-id': 'trace-abc_123' } }),
+    );
+    expect(res.headers.get('x-request-id')).toBe('trace-abc_123');
+  });
+
+  it('ignores an unsafe incoming X-Request-Id', async () => {
+    const res = await app.handle(
+      new Request('http://localhost/health', { headers: { 'x-request-id': 'bad id with spaces' } }),
+    );
+    expect(res.headers.get('x-request-id')).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it('logs scanner failures with the error', async () => {
+    const broken: ReceiptScanner = {
+      scan: async () => {
+        throw new Error('model timeout');
+      },
+    };
+    await scan(png, createApp(testConfig, broken));
+    expect(logs.find((l) => l.includes('Receipt scan failed'))).toContain('Error: model timeout');
+    expect(await waitForLog(/ERROR .*POST \/api\/receipts\/scan 502/)).toBeDefined();
   });
 });
 

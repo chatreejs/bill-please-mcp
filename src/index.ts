@@ -1,9 +1,23 @@
 import { createApp } from './app.ts';
 import { config } from './config.ts';
+import { configureLogger, getLogger } from './logger.ts';
 import { createScanner } from './scanners/index.ts';
+
+configureLogger({ level: config.logLevel });
+const log = getLogger('main');
 
 const app = createApp(config, createScanner(config)).listen(config.port);
 
-console.log(`bill-please-mcp listening on http://localhost:${app.server?.port}`);
-console.log(`  REST: POST /api/receipts/scan`);
-console.log(`  MCP:  /mcp (Streamable HTTP)`);
+log.info(
+  `Started bill-please-mcp on port ${app.server?.port} ` +
+    `(scanner=${config.scanner}, logLevel=${config.logLevel}, bun=${Bun.version})`,
+);
+log.info('REST: POST /api/receipts/scan, MCP: /mcp (Streamable HTTP), health: GET /health');
+log.debug(`CORS origins: ${config.corsOrigins.join(', ')}`);
+
+const shutdown = (signal: string) => {
+  log.info(`Received ${signal}, shutting down`);
+  void app.stop().then(() => process.exit(0));
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

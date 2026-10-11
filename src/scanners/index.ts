@@ -1,10 +1,13 @@
 import type { Config } from '../config.ts';
+import { getLogger } from '../logger.ts';
 import {
   ReceiptScanResultSchema,
   type ReceiptScanResult,
 } from '../schemas/receipt.ts';
 import { MockReceiptScanner } from './mock.ts';
 import type { ReceiptImage, ReceiptScanner } from './types.ts';
+
+const log = getLogger('scanner');
 
 export type { ReceiptImage, ReceiptScanner } from './types.ts';
 
@@ -25,6 +28,9 @@ export const scanReceiptImage = async (
   scanner: ReceiptScanner,
   image: ReceiptImage,
 ): Promise<ReceiptScanResult> => {
+  const startedAt = performance.now();
   const result = await scanner.scan(image);
+  log.debug(`${scanner.constructor.name} finished in ${Math.round(performance.now() - startedAt)}ms`);
+
   return ReceiptScanResultSchema.parse(result);
 };

@@ -2,11 +2,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as z from 'zod';
 
 import type { Config } from '../config.ts';
+import { getLogger } from '../logger.ts';
 import { type ReceiptScanner, scanReceiptImage } from '../scanners/index.ts';
 import {
   ReceiptScanResultSchema,
   SUPPORTED_IMAGE_TYPES,
 } from '../schemas/receipt.ts';
+
+const log = getLogger('mcp.server');
 
 const toolError = (text: string) => ({
   isError: true,
@@ -37,19 +40,25 @@ export const createMcpServer = (config: Config, scanner: ReceiptScanner) => {
     },
     async ({ imageBase64, mimeType }) => {
       const data = Buffer.from(imageBase64, 'base64');
-      if (data.length === 0) return toolError('imageBase64 is not valid base64');
+      if (data.length === 0) {
+        log.warn('scan_receipt rejected: imageBase64 is not valid base64');
+        return toolError('imageBase64 is not valid base64');
+      }
       if (data.length > config.maxImageBytes) {
+        log.warn(`scan_receipt rejected image of ${data.length} bytes (max ${config.maxImageBytes})`);
         return toolError(`Image larger than ${config.maxImageBytes} bytes`);
       }
 
       try {
+        log.debug(`scan_receipt called with ${mimeType} image of ${data.length} bytes`);
         const result = await scanReceiptImage(scanner, { data, mimeType });
+        log.info(`scan_receipt returned ${result.items.length} items`);
         return {
           structuredContent: result,
           content: [{ type: 'text', text: JSON.stringify(result) }],
         };
       } catch (error) {
-        console.error('MCP receipt scan failed', error);
+        log.error('scan_receipt failed', error);
         return toolError('Could not read the receipt');
       }
     },

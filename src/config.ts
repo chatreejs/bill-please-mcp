@@ -1,3 +1,5 @@
+import { parseLogLevel } from './logger.ts';
+
 const int = (value: string | undefined, fallback: number): number => {
   const parsed = Number.parseInt(value ?? '', 10);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -15,6 +17,7 @@ export const config = {
   scanner: Bun.env.SCANNER ?? 'mock',
   mockMinDelayMs: int(Bun.env.MOCK_MIN_DELAY_MS, 5000),
   mockMaxDelayMs: int(Bun.env.MOCK_MAX_DELAY_MS, 10000),
+  logLevel: parseLogLevel(Bun.env.LOG_LEVEL),
 };
 
 export type Config = typeof config;

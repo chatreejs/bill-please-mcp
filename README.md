@@ -58,6 +58,20 @@ receipt after `MOCK_MIN_DELAY_MS`–`MOCK_MAX_DELAY_MS`. To add a real model,
 implement `ReceiptScanner` and register it in `createScanner`
 (`src/scanners/index.ts`), selected with the `SCANNER` env var.
 
+## Logging
+
+Logs use Spring Boot's console format, with the request id in place of the
+thread name:
+
+```text
+2026-10-11T17:34:02.182+07:00  INFO 25352 --- [bill-please-mcp] [ web-123] receipts.route   : Scanned receipt with 4 items
+2026-10-11T17:34:02.183+07:00  INFO 25352 --- [bill-please-mcp] [ web-123] http.access      : POST /api/receipts/scan 200 121ms ip=::1
+```
+
+Set the level with `LOG_LEVEL` (`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`,
+`OFF`; default `INFO`). Every response carries an `X-Request-Id` header; send
+your own `X-Request-Id` to correlate logs across services.
+
 ## Docker
 
 The image is built and deployed by the Jenkins pipeline in `ci/Jenkinsfile`
