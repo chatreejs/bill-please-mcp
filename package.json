@@ -1,0 +1,26 @@
+{
+  "name": "bill-please-mcp",
+  "description": "Receipt scanning API and MCP server for Bill Please",
+  "version": "0.1.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "test": "bun test",
+    "check-types": "tsc --noEmit",
+    "inspect": "bunx @modelcontextprotocol/inspector"
+  },
+  "dependencies": {
+    "@elysiajs/cors": "^1.4.2",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "elysia": "^1.4.30",
+    "elysia-rate-limit": "^4.6.3",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "typescript": "^5.9.0"
+  }
+}
