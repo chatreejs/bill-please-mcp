@@ -60,9 +60,13 @@ implement `ReceiptScanner` and register it in `createScanner`
 
 ## Docker
 
+The image is built and deployed by the Jenkins pipeline in `ci/Jenkinsfile`
+(test → SonarQube → build → Trivy scan → push → GitOps deploy). To run it
+manually:
+
 ```bash
-cp .env.example .env
-docker compose up -d --build
+docker build -t bill-please-mcp .
+docker run -d -p 3001:3001 --env-file .env bill-please-mcp
 ```
 
 Behind a reverse proxy set `TRUST_PROXY=true` so rate limiting uses the real

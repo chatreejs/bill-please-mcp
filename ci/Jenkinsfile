@@ -1,0 +1,136 @@
+pipeline {
+  agent any
+
+  environment {
+    IMAGE_URL = "chatreejs/bill-please-mcp"
+  }
+
+  stages {
+    stage('Prepare Env') {
+      steps {
+        script {
+          // Derive the version from package.json instead of hardcoding it.
+          // Extracted with grep/sed so we don't depend on the Pipeline Utility
+          // Steps plugin (readJSON) or on bun being present on the agent.
+          env.VERSION = sh(
+            returnStdout: true,
+            script: '''grep '"version"' package.json | head -1 | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\\1/' '''
+          ).trim()
+
+          // BRANCH_NAME is only set on Multibranch Pipeline jobs; on a plain
+          // Pipeline job it is null, so fall back to GIT_BRANCH (e.g.
+          // "origin/develop") or ask git directly. Strip any remote prefix.
+          env.GIT_REF = (env.BRANCH_NAME ?: env.GIT_BRANCH ?: sh(
+            returnStdout: true,
+            script: 'git rev-parse --abbrev-ref HEAD'
+          ).trim()).replaceFirst(/^origin\//, '')
+
+          // On develop, publish a pre-release build; on main/master, publish the release version.
+          if (env.GIT_REF == 'develop') {
+            def now = new Date()
+            env.BUILD_DATE = now.format("yyyyMMdd")
+            env.BUILD_VERSION = "${VERSION}-develop.${BUILD_DATE}.${BUILD_NUMBER}"
+            env.DEPLOY_JOB = 'chatreejs/gitops/bill-please-mcp-manifest-dev'
+          } else {
+            env.BUILD_VERSION = "${VERSION}"
+            env.DEPLOY_JOB = 'chatreejs/gitops/bill-please-mcp-manifest-prod'
+          }
+        }
+      }
+    }
+
+    stage('Test') {
+      agent {
+        docker {
+          // Keep in sync with .tool-versions.
+          image 'oven/bun:1.4.3-alpine'
+          args '-u root'
+          reuseNode true
+        }
+      }
+      steps {
+        sh 'bun install --frozen-lockfile'
+        sh 'bun run check-types'
+        // lcov output is picked up by the Static Code Scan stage.
+        sh 'bun test --coverage --coverage-reporter=lcov'
+      }
+    }
+
+    stage('Static Code Scan') {
+      agent {
+        docker {
+          image 'sonarsource/sonar-scanner-cli:latest'
+          args '-u root --privileged'
+          // Reuse the workspace so the scanner sees coverage/lcov.info from the Test stage.
+          reuseNode true
+        }
+      }
+      steps {
+        withSonarQubeEnv('SonarQube Server') {
+          sh "sonar-scanner -Dsonar.projectVersion=${BUILD_VERSION}"
+        }
+      }
+    }
+
+    stage('Build Docker Image') {
+      steps {
+        script {
+          currentBuild.displayName += " version ${BUILD_VERSION}"
+        }
+        sh 'docker build -f Dockerfile . -t ${IMAGE_URL}:${BUILD_VERSION}'
+      }
+    }
+
+    stage('Image Vulnerability Scan') {
+      agent {
+        docker {
+          image 'aquasec/trivy:latest'
+          args '-v /var/run/docker.sock:/var/run/docker.sock -v trivy_cache:/.cache --entrypoint="" -u root --privileged'
+        }
+      }
+      steps {
+        sh 'trivy image --format template --template \"@/contrib/html.tpl\" --output report.html --severity HIGH,CRITICAL --no-progress ${IMAGE_URL}:${BUILD_VERSION}'
+
+        publishHTML target : [
+          allowMissing: true,
+          alwaysLinkToLastBuild: false,
+          keepAll: true,
+          reportDir: '.',
+          reportFiles: 'report.html',
+          reportName: 'Trivy Scan Report',
+        ]
+      }
+    }
+
+    stage('Push to registry') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'docker-hub-credential', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+          sh 'echo $PASSWORD | docker login -u $USERNAME --password-stdin'
+          sh 'docker push ${IMAGE_URL}:${BUILD_VERSION}'
+        }
+      }
+    }
+
+    stage('Clear Image') {
+      steps {
+        sh 'docker rmi ${IMAGE_URL}:${BUILD_VERSION}'
+      }
+    }
+
+    stage('Deploy to Kubernetes') {
+      steps {
+        build job: "${DEPLOY_JOB}", parameters: [string(name: 'MCP_IMAGE_TAG', value: "${BUILD_VERSION}")]
+      }
+    }
+  }
+
+  post {
+    success {
+      discordSend description: "Duration: ${currentBuild.durationString}", link: env.BUILD_URL, result: currentBuild.currentResult, title: "${env.JOB_NAME} - # ${env.BUILD_VERSION}", footer: "${currentBuild.getBuildCauses()[0].shortDescription}",webhookURL: "https://discord.com/api/webhooks/${env.DISCORD_WEBHOOK_ID}/${env.DISCORD_WEBHOOK_TOKEN}"
+    }
+    failure {
+      discordSend description: "Duration: ${currentBuild.durationString}", link: env.BUILD_URL, result: currentBuild.currentResult, title: "${env.JOB_NAME} - # ${env.BUILD_VERSION}", footer: "${currentBuild.getBuildCauses()[0].shortDescription}",webhookURL: "https://discord.com/api/webhooks/${env.DISCORD_WEBHOOK_ID}/${env.DISCORD_WEBHOOK_TOKEN}"
+    }
+  }
+
+}
