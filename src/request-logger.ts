@@ -7,6 +7,9 @@ const log = getLogger('http.access');
 
 const REQUEST_ID_PATTERN = /^[\w-]{1,64}$/;
 
+// Kubernetes liveness/readiness probes and the Docker HEALTHCHECK (wget)
+const PROBE_USER_AGENT = /^(kube-probe|wget)\//i;
+
 /** Client IP, trusting X-Forwarded-For only behind our own reverse proxy */
 export const clientIp = (
   request: Request,
@@ -47,10 +50,13 @@ export const requestLogger = (config: Config) =>
       const status =
         responseValue instanceof Response ? responseValue.status : Number(set.status ?? 200);
       const duration = context ? Math.round(performance.now() - context.startedAt) : 0;
-      const line = `${request.method} ${path} ${status} ${duration}ms ip=${context?.clientIp || '-'}`;
+      const userAgent = request.headers.get('user-agent') ?? '';
+      // JSON-quoted: user agents contain spaces and must not break the single line
+      const line = `${request.method} ${path} ${status} ${duration}ms ip=${context?.clientIp || '-'} ua=${userAgent ? JSON.stringify(userAgent) : '-'}`;
 
-      // Health is polled by every open web client and the Docker healthcheck
-      if (path === '/health' && status < 400) log.debug(line);
+      // Infra probes hit /health every few seconds; web client polls stay visible
+      const isProbe = PROBE_USER_AGENT.test(userAgent);
+      if (path === '/health' && status < 400 && isProbe) log.debug(line);
       else if (status >= 500) log.error(line);
       else if (status >= 400) log.warn(line);
       else log.info(line);
