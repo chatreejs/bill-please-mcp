@@ -87,7 +87,7 @@ How the web calls this server (`../bill-please/src/utils/receipt.util.ts`):
 
 ## Environment (`.env.example`)
 
-`PORT` (3001), `CORS_ORIGINS` (comma list, default `http://localhost:3000`; add LAN IP origin to test from a phone), `MAX_IMAGE_BYTES` (5 MB), `RATE_LIMIT_PER_MINUTE` (30), `TRUST_PROXY`, `SCANNER` (`mock`), `MOCK_MIN_DELAY_MS` / `MOCK_MAX_DELAY_MS` (5000–10000, simulates VLM latency), `LOG_LEVEL` (`INFO`; TRACE/DEBUG/INFO/WARN/ERROR/OFF).
+`PORT` (3001), `CORS_ORIGINS` (comma list, default `http://localhost:3000`; add LAN IP origin to test from a phone; `*` matches one hostname part, e.g. `https://bill-please-*-chatreejs-projects.vercel.app` for Vercel previews), `MAX_IMAGE_BYTES` (5 MB), `RATE_LIMIT_PER_MINUTE` (30), `TRUST_PROXY`, `SCANNER` (`mock`), `MOCK_MIN_DELAY_MS` / `MOCK_MAX_DELAY_MS` (5000–10000, simulates VLM latency), `LOG_LEVEL` (`INFO`; TRACE/DEBUG/INFO/WARN/ERROR/OFF).
 
 ## Deployment
 

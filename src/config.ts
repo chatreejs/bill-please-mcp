@@ -21,3 +21,12 @@ export const config = {
 };
 
 export type Config = typeof config;
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// "*" inside an origin matches one hostname label part, e.g. Vercel preview deploys:
+// https://bill-please-*-chatreejs-projects.vercel.app
+export const corsOrigin = (origin: string): string | RegExp =>
+  origin === '*' || !origin.includes('*')
+    ? origin
+    : new RegExp(`^${origin.split('*').map(escapeRegExp).join('[a-z0-9-]+')}$`);

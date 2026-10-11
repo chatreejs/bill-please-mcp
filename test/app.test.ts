@@ -150,3 +150,27 @@ describe('MCP /mcp', () => {
     expect(body.result.structuredContent.items.length).toBeGreaterThan(0);
   });
 });
+
+describe('cors', () => {
+  const corsApp = createApp(
+    { ...testConfig, corsOrigins: ['http://localhost:3000', 'https://bill-please-*-chatreejs-projects.vercel.app'] },
+    new MockReceiptScanner(0, 0),
+  );
+  const allowOrigin = async (origin: string) =>
+    (await corsApp.handle(new Request('http://localhost/health', { headers: { origin } }))).headers.get(
+      'access-control-allow-origin',
+    );
+
+  it('allows exact and wildcard origins', async () => {
+    expect(await allowOrigin('http://localhost:3000')).toBe('http://localhost:3000');
+    expect(await allowOrigin('https://bill-please-2a4k1iats-chatreejs-projects.vercel.app')).toBe(
+      'https://bill-please-2a4k1iats-chatreejs-projects.vercel.app',
+    );
+  });
+
+  it('rejects origins outside the wildcard', async () => {
+    expect(await allowOrigin('https://evil.example')).toBeNull();
+    expect(await allowOrigin('https://bill-please-x.evil.com-chatreejs-projects.vercel.app')).toBeNull();
+    expect(await allowOrigin('http://bill-please-2a4k1iats-chatreejs-projects.vercel.app')).toBeNull();
+  });
+});

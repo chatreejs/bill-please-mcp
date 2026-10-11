@@ -2,7 +2,7 @@ import { cors } from '@elysiajs/cors';
 import { Elysia } from 'elysia';
 import { rateLimit } from 'elysia-rate-limit';
 
-import type { Config } from './config.ts';
+import { type Config, corsOrigin } from './config.ts';
 import { mcpRoutes } from './mcp/route.ts';
 import { clientIp, requestLogger } from './request-logger.ts';
 import { receiptRoutes } from './routes/receipts.ts';
@@ -11,7 +11,7 @@ import type { ReceiptScanner } from './scanners/index.ts';
 export const createApp = (config: Config, scanner: ReceiptScanner) =>
   new Elysia()
     .use(requestLogger(config))
-    .use(cors({ origin: config.corsOrigins }))
+    .use(cors({ origin: config.corsOrigins.map(corsOrigin) }))
     .get('/health', () => ({ status: 'ok' }))
     .use(
       rateLimit({
