@@ -30,10 +30,10 @@ pipeline {
             def now = new Date()
             env.BUILD_DATE = now.format("yyyyMMdd")
             env.BUILD_VERSION = "${VERSION}-develop.${BUILD_DATE}.${BUILD_NUMBER}"
-            env.DEPLOY_JOB = 'chatreejs/gitops/bill-please-mcp-manifest-dev'
+            env.DEPLOY_JOB = 'chatreejs/gitops/bill-please-backend-manifest-dev'
           } else {
             env.BUILD_VERSION = "${VERSION}"
-            env.DEPLOY_JOB = 'chatreejs/gitops/bill-please-mcp-manifest-prod'
+            env.DEPLOY_JOB = 'chatreejs/gitops/bill-please-backend-manifest-prod'
           }
         }
       }
@@ -117,6 +117,7 @@ pipeline {
       }
     }
 
+    // The manifest repo bill-please-backend also deploys bill-please-ocr, which sets OCR_IMAGE_TAG
     stage('Deploy to Kubernetes') {
       steps {
         build job: "${DEPLOY_JOB}", parameters: [string(name: 'MCP_IMAGE_TAG', value: "${BUILD_VERSION}")]
