@@ -134,7 +134,7 @@ The Jenkins pipeline in `ci/Jenkinsfile` is copied from `../passwords`. Its stag
 4. It builds the Docker image, scans it with Trivy and pushes `chatreejs/bill-please-mcp` to Docker Hub.
 5. It triggers the gitops job `chatreejs/gitops/bill-please-backend-manifest-{dev,prod}` with the parameter `MCP_IMAGE_TAG`, then notifies Discord.
 
-The manifest repo is `../../gitlab.com/chatreedev-manifest/bill-please-backend`. One Helm chart deploys this server and bill-please-ocr into the `bill-please-mcp-{dev,prod}` namespaces, and the ocr pipeline sets `OCR_IMAGE_TAG` on the same gitops jobs. In the cluster, the mcp config uses `SCANNER=hybrid` with the in-release OCR service and the shared llm-server.
+The manifest repo is `../../gitlab.com/chatreedev-manifest/bill-please-backend`. One Helm chart deploys this server and bill-please-ocr into the `bill-please-backend-{dev,prod}` namespaces, and the ocr pipeline sets `OCR_IMAGE_TAG` on the same gitops jobs. In the cluster, the mcp config uses `SCANNER=hybrid` with the in-release OCR service and the shared llm-server.
 
 There is no GitHub Actions CI, by the user's choice.
 
@@ -154,6 +154,6 @@ Likely next steps:
 ## Related repos
 
 - [bill-please-ocr](../bill-please-ocr) is the OCR step of the hybrid scanner. It is a Python service with FastAPI and PaddleOCR, and `POST /v1/ocr` returns receipt text lines. The user decided to keep OCR in Python and keep this Elysia server as the API, which will call the OCR service over HTTP. The design and roadmap are in the local `docs/` folder, which is gitignored and not pushed.
-- The shared on-prem LLM is the `llm-server` Helm chart in `../../gitlab.com/chatreedev-manifest/llm-server`, at `http://llm-server.llm-server.svc:8080/v1`. Its NetworkPolicy admits pods labelled `app: bill-please-mcp` from the `bill-please-mcp-{dev,prod}` namespaces, so the manifest keeps that label on the mcp pods.
+- The shared on-prem LLM is the `llm-server` Helm chart in `../../gitlab.com/chatreedev-manifest/llm-server`, at `http://llm-server.llm-server.svc:8080/v1`. Its NetworkPolicy admits pods labelled `app: bill-please-mcp` from the `bill-please-backend-{dev,prod}` namespaces, so the manifest keeps that label on the mcp pods.
 
 To test the hybrid scanner locally, run bill-please-ocr with `PORT=8000 uv run python -m receipt_ocr` in its repo, port-forward the LLM with `kubectl -n llm-server port-forward svc/llm-server 8080:8080`, and start this server with `SCANNER=hybrid bun dev`. The defaults of `OCR_URL` and `LLM_URL` point at those ports.
