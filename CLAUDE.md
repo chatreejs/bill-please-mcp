@@ -38,17 +38,32 @@ src/
     types.ts          ReceiptScanner interface { scan(image): ReceiptScanResult }, ReceiptImage
     index.ts          createScanner(config) factory that switches on SCANNER, and scanReceiptImage()
     mock.ts           MockReceiptScanner: a random sample receipt after a random delay
+    errors.ts         UnreadableReceiptError: no usable text in the image (REST 422)
+    hybrid/
+      index.ts        HybridReceiptScanner: OCR, then LLM, then post-processing and a total check
+      ocr-client.ts   HttpOcrClient for bill-please-ocr POST /v1/ocr, forwards X-Request-Id
+      llm-client.ts   OpenAiCompatibleExtractor: chat completions with a json_schema response_format
+      extraction.ts   compact LLM output schema (zod) and its JSON schema for llama.cpp
+      prompt.ts       system prompt with one short example
+      postprocess.ts  toReceiptItems (compact output to the contract) and reconcile (vs printed total)
   routes/receipts.ts  REST scan route: 415 for a bad mime type, 413 for size, 502 for a scanner failure
   mcp/
     server.ts         createMcpServer() registers the tool `scan_receipt`
     route.ts          `/mcp` route using WebStandardStreamableHTTPServerTransport
 test/app.test.ts      tests through app.handle(new Request(...)), without a real port
+test/hybrid.test.ts   hybrid scanner with a stub OCR client and extractor, no network
 ```
 
 Key points:
 
 - **Dependency injection.** `createApp(config, scanner)` takes the scanner, so tests pass `new MockReceiptScanner(0, 0)` or a broken stub. New routes follow the same `xxxRoutes(config, scanner)` plugin pattern.
 - **Contract validation.** Always call the scanner through `scanReceiptImage(scanner, image)`. It runs `zod.parse` on the scanner output, so a misbehaving AI model can never return malformed items. The REST route turns the error into a 502, and MCP returns `isError`.
+- **Hybrid scanner.** `SCANNER=hybrid` sends the photo to bill-please-ocr and only the OCR text to the LLM.
+  - The LLM returns a compact shape to save tokens: items as `[name, quantity, line amount]`, plus receipt-level `servicePercent`, `vatPercent`, `vatIncluded` and the printed `total`. `toReceiptItems` divides the amount by the quantity and puts the receipt rates on every item, discounts included, so the web total equals the receipt total.
+  - A VAT-inclusive receipt keeps its printed prices and gets no `vatPercentage`. This follows the recommendation in the local docs. The user hasn't confirmed it yet.
+  - `reconcile` prices the items the way the web does and logs WARN when they don't match the printed total. There is no retry or fallback yet.
+  - When OCR finds no lines, the mean confidence is under `OCR_MIN_CONFIDENCE`, or the LLM finds no items, the scanner throws `UnreadableReceiptError` without calling the LLM. REST answers 422, and MCP returns a friendly `isError`.
+  - llama.cpp rejects boolean subschemas, so `extraction.ts` strips the `items: false` that zod adds to tuples.
 - **MCP transport.** The route uses the SDK's `WebStandardStreamableHTTPServerTransport`, which takes a Request and returns a Response, so it fits Elysia without a community MCP plugin. It runs in stateless mode (`sessionIdGenerator: undefined`, `enableJsonResponse: true`) and creates a fresh `McpServer` and transport per request, closed in `finally`. The route must keep `{ parse: 'none' }`, otherwise Elysia consumes the body before the transport reads it.
 - **MCP tool `scan_receipt`.** Its input is `{ imageBase64, mimeType }` and its `outputSchema` is `ReceiptScanResultSchema.shape`. It returns both `structuredContent` and a JSON `text` content, and has the `readOnlyHint` annotation.
 - **Logging.** Never use `console.*`. Use `const log = getLogger('area.name')` from `src/logger.ts`, which has no dependencies.
@@ -101,6 +116,10 @@ How the web calls this server, in `../bill-please/src/utils/receipt.util.ts`:
 | `TRUST_PROXY` | | |
 | `SCANNER` | `mock` | |
 | `MOCK_MIN_DELAY_MS`, `MOCK_MAX_DELAY_MS` | `5000`, `10000` | Simulates VLM latency |
+| `OCR_URL`, `OCR_TIMEOUT_MS` | `http://localhost:8000`, `20000` | bill-please-ocr |
+| `OCR_MIN_CONFIDENCE` | `0.6` | Mean line confidence below this answers 422 without an LLM call |
+| `LLM_URL`, `LLM_MODEL`, `LLM_TIMEOUT_MS` | `http://localhost:8080/v1`, `qwen3-4b-instruct-2507`, `45000` | Any OpenAI compatible API |
+| `LLM_API_KEY` | | Bearer token, only for APIs that need one |
 | `LOG_LEVEL` | `INFO` | `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR` or `OFF` |
 
 ## Deployment
@@ -113,18 +132,20 @@ The Jenkins pipeline in `ci/Jenkinsfile` is copied from `../passwords`. Its stag
 2. Test runs check-types and the tests with lcov coverage in `oven/bun:1.4.3-alpine`. Keep that tag in sync with `.tool-versions`.
 3. SonarQube scans with `sonar-project.properties`.
 4. It builds the Docker image, scans it with Trivy and pushes `chatreejs/bill-please-mcp` to Docker Hub.
-5. It triggers the gitops job `chatreejs/gitops/bill-please-mcp-manifest-{dev,prod}` with the parameter `MCP_IMAGE_TAG`, then notifies Discord.
+5. It triggers the gitops job `chatreejs/gitops/bill-please-backend-manifest-{dev,prod}` with the parameter `MCP_IMAGE_TAG`, then notifies Discord.
+
+The manifest repo is `../../gitlab.com/chatreedev-manifest/bill-please-backend`. One Helm chart deploys this server and bill-please-ocr into the `bill-please-mcp-{dev,prod}` namespaces, and the ocr pipeline sets `OCR_IMAGE_TAG` on the same gitops jobs. In the cluster, the mcp config uses `SCANNER=hybrid` with the in-release OCR service and the shared llm-server.
 
 There is no GitHub Actions CI, by the user's choice.
 
 ## Status and roadmap
 
-Done: REST and MCP endpoints, the mock scanner, the zod contract, CORS, rate limiting, Spring Boot style logging with request ids, graceful SIGTERM shutdown, tests (20 passing), the Dockerfile and the web integration.
+Done: REST and MCP endpoints, the mock scanner, the hybrid scanner, the zod contract, CORS, rate limiting, Spring Boot style logging with request ids, graceful SIGTERM shutdown, tests (30 passing), the Dockerfile and the web integration.
 
 Likely next steps:
 
 1. Code work happens on `develop`, with `git@github.com:chatreejs/bill-please-mcp` as the remote. Add commitlint and husky like bill-please, for Conventional Commits with a lowercase subject.
-2. Build a real scanner. The user hasn't chosen an AI provider yet and picked "mock only for now". Implement `ReceiptScanner`, for example with Claude, Gemini or OpenAI vision and structured JSON output. Register it in `createScanner` and select it with `SCANNER`. The prompt should extract per-item service and VAT %, the unit price and negative discounts, from Thai and English receipts.
+2. Finish the hybrid scanner: test it on real receipts, add a scan queue (one GPU serves one scan at a time), a `/livez` probe and a dependency-aware `/health`, and maybe a cloud fallback. The user hasn't chosen a cloud provider.
 3. Add auth on `/mcp`, an API key or OAuth, before exposing a paid model publicly.
 4. Use a shared rate-limit store if the server runs as several replicas.
 5. A possible future MCP tool could create a bill-please bill from the items and return a link that opens the web app pre-filled. That needs an import-from-URL feature in bill-please web, which only uses localStorage today.
@@ -132,5 +153,7 @@ Likely next steps:
 
 ## Related repos
 
-- [bill-please-ocr](../bill-please-ocr) is the OCR step of the planned hybrid scanner. It is a Python service with FastAPI and PaddleOCR, and `POST /v1/ocr` returns receipt text lines. The user decided to keep OCR in Python and keep this Elysia server as the API, which will call the OCR service over HTTP. The design and roadmap are in the local `docs/` folder, which is gitignored and not pushed.
-- The shared on-prem LLM is the `llm-server` Helm chart in `../../gitlab.com/chatreedev-manifest/llm-server`, at `http://llm-server.llm-server.svc:8080/v1`.
+- [bill-please-ocr](../bill-please-ocr) is the OCR step of the hybrid scanner. It is a Python service with FastAPI and PaddleOCR, and `POST /v1/ocr` returns receipt text lines. The user decided to keep OCR in Python and keep this Elysia server as the API, which will call the OCR service over HTTP. The design and roadmap are in the local `docs/` folder, which is gitignored and not pushed.
+- The shared on-prem LLM is the `llm-server` Helm chart in `../../gitlab.com/chatreedev-manifest/llm-server`, at `http://llm-server.llm-server.svc:8080/v1`. Its NetworkPolicy admits pods labelled `app: bill-please-mcp` from the `bill-please-mcp-{dev,prod}` namespaces, so the manifest keeps that label on the mcp pods.
+
+To test the hybrid scanner locally, run bill-please-ocr with `PORT=8000 uv run python -m receipt_ocr` in its repo, port-forward the LLM with `kubectl -n llm-server port-forward svc/llm-server 8080:8080`, and start this server with `SCANNER=hybrid bun dev`. The defaults of `OCR_URL` and `LLM_URL` point at those ports.
