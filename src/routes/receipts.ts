@@ -2,7 +2,7 @@ import { Elysia, t } from 'elysia';
 
 import type { Config } from '../config.ts';
 import { getLogger } from '../logger.ts';
-import { type ReceiptScanner, scanReceiptImage } from '../scanners/index.ts';
+import { type ReceiptScanner, scanReceiptImage, UnreadableReceiptError } from '../scanners/index.ts';
 import { SUPPORTED_IMAGE_TYPES, type SupportedImageType } from '../schemas/receipt.ts';
 
 const log = getLogger('receipts.route');
@@ -34,6 +34,10 @@ export const receiptRoutes = (config: Config, scanner: ReceiptScanner) =>
         log.info(`Scanned receipt with ${result.items.length} items`);
         return result;
       } catch (error) {
+        if (error instanceof UnreadableReceiptError) {
+          log.warn(`Receipt unreadable: ${error.message}`);
+          return status(422, { error: 'No receipt text found in the image' });
+        }
         log.error('Receipt scan failed', error);
         return status(502, { error: 'Could not read the receipt' });
       }

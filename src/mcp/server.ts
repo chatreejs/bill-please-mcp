@@ -3,7 +3,7 @@ import * as z from 'zod';
 
 import type { Config } from '../config.ts';
 import { getLogger } from '../logger.ts';
-import { type ReceiptScanner, scanReceiptImage } from '../scanners/index.ts';
+import { type ReceiptScanner, scanReceiptImage, UnreadableReceiptError } from '../scanners/index.ts';
 import {
   ReceiptScanResultSchema,
   SUPPORTED_IMAGE_TYPES,
@@ -58,6 +58,10 @@ export const createMcpServer = (config: Config, scanner: ReceiptScanner) => {
           content: [{ type: 'text', text: JSON.stringify(result) }],
         };
       } catch (error) {
+        if (error instanceof UnreadableReceiptError) {
+          log.warn(`scan_receipt found no receipt text: ${error.message}`);
+          return toolError('No receipt text found in the image. Try a sharper, well lit photo.');
+        }
         log.error('scan_receipt failed', error);
         return toolError('Could not read the receipt');
       }
