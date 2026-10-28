@@ -5,58 +5,63 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-bun dev               # dev server on localhost:3001 (watch mode)
-bun start             # run without watch
+bun dev               # dev server on localhost:3001, restarts on change
+bun start             # run without watch mode
 bun test              # bun:test suite in test/
 bun run check-types   # tsc --noEmit
-bun run inspect       # MCP Inspector → Streamable HTTP, http://localhost:3001/mcp
+bun run inspect       # MCP Inspector; choose Streamable HTTP and http://localhost:3001/mcp
 ```
 
-Bun is installed via **asdf** and pinned in `.tool-versions` (`bun 1.4.3`). Copy `.env.example` → `.env` for local config. There is no linter/formatter configured yet.
+asdf installs Bun, and `.tool-versions` pins it to `bun 1.4.3`. For local config, copy `.env.example` to `.env`. There is no linter or formatter yet.
 
 ## Purpose
 
-Backend for [bill-please](../bill-please) (a client-only React PWA that splits restaurant bills). It turns a receipt photo into structured bill items. One server exposes the same scanner two ways:
+This is the backend for [bill-please](../bill-please), a client-only React PWA that splits restaurant bills. It turns a receipt photo into structured bill items. One server exposes the same scanner in two ways:
 
 | Endpoint                  | Protocol                                   | Consumer                                                                  |
 | ------------------------- | ------------------------------------------ | ------------------------------------------------------------------------- |
 | `POST /api/receipts/scan` | REST, `multipart/form-data`, field `image` | bill-please web                                                           |
-| `/mcp`                    | MCP Streamable HTTP, **stateless**         | AI clients (Claude, ChatGPT, Cursor, …)                                   |
-| `GET /health`             | REST                                       | Docker healthcheck + bill-please web (enables the "Add from bill" button) |
+| `/mcp`                    | MCP Streamable HTTP, stateless             | AI clients such as Claude, ChatGPT and Cursor                             |
+| `GET /health`             | REST                                       | Docker healthcheck, and bill-please web to enable the "Add from bill" button |
 
-## Architecture.
+## Architecture
 
 ```
 src/
-  index.ts            entry: createApp(config, createScanner(config)).listen()
-  app.ts              Elysia app: requestLogger → cors → /health → rateLimit → receipt routes → mcp routes
-  config.ts           env parsing (Bun.env) → `config` object
-  logger.ts           Spring Boot style logger: getLogger(name), LOG_LEVEL, logContext (AsyncLocalStorage ≈ MDC)
-  request-logger.ts   Elysia plugin: X-Request-Id, access log line per request, unhandled errors; clientIp()
+  index.ts            entry point: createApp(config, createScanner(config)).listen()
+  app.ts              Elysia app, in order: requestLogger, cors, /health, rateLimit, receipt routes, mcp routes
+  config.ts           parses Bun.env into the `config` object
+  logger.ts           Spring Boot style logger: getLogger(name), LOG_LEVEL, logContext (AsyncLocalStorage, like Log4j's MDC)
+  request-logger.ts   Elysia plugin: X-Request-Id, one access log line per request, unhandled errors; clientIp()
   schemas/receipt.ts  zod contract: ReceiptItemSchema, ReceiptScanResultSchema, SUPPORTED_IMAGE_TYPES
   scanners/
-    types.ts          ReceiptScanner interface { scan(image) → ReceiptScanResult }, ReceiptImage
-    index.ts          createScanner(config) factory (switch on SCANNER env) + scanReceiptImage()
-    mock.ts           MockReceiptScanner: random sample receipt after a random delay
-  routes/receipts.ts  REST scan route (validates mime type 415, size 413, scanner failure 502)
+    types.ts          ReceiptScanner interface { scan(image): ReceiptScanResult }, ReceiptImage
+    index.ts          createScanner(config) factory that switches on SCANNER, and scanReceiptImage()
+    mock.ts           MockReceiptScanner: a random sample receipt after a random delay
+  routes/receipts.ts  REST scan route: 415 for a bad mime type, 413 for size, 502 for a scanner failure
   mcp/
-    server.ts         createMcpServer(): registers tool `scan_receipt`
+    server.ts         createMcpServer() registers the tool `scan_receipt`
     route.ts          `/mcp` route using WebStandardStreamableHTTPServerTransport
-test/app.test.ts      tests via app.handle(new Request(...)), no real port
+test/app.test.ts      tests through app.handle(new Request(...)), without a real port
 ```
 
 Key points:
 
-- **Dependency injection**: `createApp(config, scanner)` takes the scanner so tests pass `new MockReceiptScanner(0, 0)` or a broken stub. Keep new routes following the `xxxRoutes(config, scanner)` plugin pattern.
-- **Contract validation**: always go through `scanReceiptImage(scanner, image)`; it `zod.parse`s the scanner output so a misbehaving AI model can never return malformed items (route maps the throw to 502 / MCP `isError`).
-- **MCP transport**: uses the SDK's `WebStandardStreamableHTTPServerTransport` (Request → Response), which fits Elysia natively — no community Elysia MCP plugin. Stateless mode (`sessionIdGenerator: undefined`, `enableJsonResponse: true`): a fresh `McpServer` + transport per request, closed in `finally`. The route **must** keep `{ parse: 'none' }` so Elysia doesn't consume the body before the transport reads it.
-- **MCP tool `scan_receipt`**: input `{ imageBase64, mimeType }`, `outputSchema` = `ReceiptScanResultSchema.shape`, returns both `structuredContent` and a JSON `text` content. Annotated `readOnlyHint`.
-- **Logging**: never use `console.*`; use `const log = getLogger('area.name')` from `src/logger.ts` (zero deps). Format mirrors Spring Boot: `<ISO time> <LEVEL> <pid> --- [bill-please-mcp] [<requestId>|main] <logger> : <msg>`, errors printed as `Name: message` + stack + `Caused by:`. Non-Error args are JSON-stringified to keep one line. The request id comes from `logContext` (set with `enterWith` in `onRequest`, so it follows async calls without passing it around); a valid incoming `X-Request-Id` is reused and always echoed back. Access log line: `METHOD path status Nms ip=… ua="…"` (UA JSON-quoted, `-` if missing); INFO for 2xx/3xx, WARN 4xx, ERROR 5xx, `/health` from infra probes (User-Agent `kube-probe/*` or `Wget/*`) only at DEBUG, from the web at INFO. Client IP is resolved in `onRequest` (Bun can't see the socket after the response). Never log image bytes or secrets. Tests capture output via `configureLogger({ write })`.
-- **Rate limiting**: `elysia-rate-limit` v4 (v5 needs Elysia 2, still beta — stay on Elysia 1.4). In-memory per process, skips `/health`. Client IP from `X-Forwarded-For` only when `TRUST_PROXY=true`.
+- **Dependency injection.** `createApp(config, scanner)` takes the scanner, so tests pass `new MockReceiptScanner(0, 0)` or a broken stub. New routes follow the same `xxxRoutes(config, scanner)` plugin pattern.
+- **Contract validation.** Always call the scanner through `scanReceiptImage(scanner, image)`. It runs `zod.parse` on the scanner output, so a misbehaving AI model can never return malformed items. The REST route turns the error into a 502, and MCP returns `isError`.
+- **MCP transport.** The route uses the SDK's `WebStandardStreamableHTTPServerTransport`, which takes a Request and returns a Response, so it fits Elysia without a community MCP plugin. It runs in stateless mode (`sessionIdGenerator: undefined`, `enableJsonResponse: true`) and creates a fresh `McpServer` and transport per request, closed in `finally`. The route must keep `{ parse: 'none' }`, otherwise Elysia consumes the body before the transport reads it.
+- **MCP tool `scan_receipt`.** Its input is `{ imageBase64, mimeType }` and its `outputSchema` is `ReceiptScanResultSchema.shape`. It returns both `structuredContent` and a JSON `text` content, and has the `readOnlyHint` annotation.
+- **Logging.** Never use `console.*`. Use `const log = getLogger('area.name')` from `src/logger.ts`, which has no dependencies.
+  - The format follows Spring Boot: `<ISO time> <LEVEL> <pid> --- [bill-please-mcp] [<requestId>|main] <logger> : <msg>`. Errors print as `Name: message`, then the stack, then `Caused by:`. Non-Error arguments are JSON-stringified, so each record stays on one line.
+  - The request id comes from `logContext`. `onRequest` sets it with `enterWith`, so it follows async calls without being passed around. The server reuses a valid incoming `X-Request-Id` and always sends it back.
+  - The access log line is `METHOD path status Nms ip=… ua="…"`, with the user agent JSON-quoted, or `-` if missing. 2xx and 3xx log at INFO, 4xx at WARN and 5xx at ERROR. `/health` from infra probes (User-Agent `kube-probe/*` or `Wget/*`) logs only at DEBUG, and from the web at INFO.
+  - `onRequest` resolves the client IP, because Bun can't see the socket after the response.
+  - Never log image bytes or secrets. Tests capture output with `configureLogger({ write })`.
+- **Rate limiting.** It uses `elysia-rate-limit` v4. v5 needs Elysia 2, which is still in beta, so stay on Elysia 1.4. The limit is in memory per process and skips `/health`. The client IP comes from `X-Forwarded-For` only when `TRUST_PROXY=true`.
 
-## Contract with bill-please web (keep in sync!)
+## Contract with bill-please web (keep in sync)
 
-`src/schemas/receipt.ts` mirrors `IReceiptItem` / `IReceiptScanResult` in `../bill-please/src/interfaces/receipt.ts`:
+`src/schemas/receipt.ts` mirrors `IReceiptItem` and `IReceiptScanResult` in `../bill-please/src/interfaces/receipt.ts`:
 
 ```json
 {
@@ -73,37 +78,59 @@ Key points:
 }
 ```
 
-- `price` = **unit** price before service/VAT; negative allowed (discounts).
-- `servicePercentage` / `vatPercentage` are **per item** (user decision — not bill-level), optional, default 0.
-- The web side converts with `receiptItemToBillItem` (`../bill-please/src/utils/bill.util.ts`): service = price×qty×s%, VAT = (price×qty + service)×v%. Same formula as its manual item form.
-- The web also defensively re-normalizes responses (`normalizeReceiptItems`), drops items without name/price.
+- `price` is the unit price before service charge and VAT. It can be negative for discounts.
+- `servicePercentage` and `vatPercentage` are per item, not per bill. That is a user decision. Both are optional and default to 0.
+- The web converts items with `receiptItemToBillItem` in `../bill-please/src/utils/bill.util.ts`. Service is price × quantity × service %, and VAT is (price × quantity + service) × VAT %. Its manual item form uses the same formula.
+- The web also re-normalizes responses with `normalizeReceiptItems` and drops items without a name or price.
 
-How the web calls this server (`../bill-please/src/utils/receipt.util.ts`):
+How the web calls this server, in `../bill-please/src/utils/receipt.util.ts`:
 
-- Env `VITE_APP_BILL_PLEASE_MCP_URL` (e.g. `http://localhost:3001`); no local mock fallback anymore.
-- Resizes photos client-side to ≤1600px JPEG (q 0.85) before upload; falls back to original file if the browser can't decode (HEIC outside Safari) — so HEIC/HEIF must stay accepted here.
-- Polls `GET /health` via TanStack Query every 60 s (+ on window focus); "Add from bill" button is disabled unless healthy. CORS must therefore allow the web origin on `/health` too.
-- Axios timeout 60 s on scan.
+- It reads the URL from `VITE_APP_BILL_PLEASE_MCP_URL`, for example `http://localhost:3001`. There is no local mock fallback anymore.
+- It resizes photos in the browser to a JPEG of at most 1600 px at quality 0.85 before upload. If the browser can't decode the photo, for example HEIC outside Safari, it sends the original file. So this server must keep accepting HEIC and HEIF.
+- It polls `GET /health` with TanStack Query every 60 s and on window focus, and disables the "Add from bill" button unless the server is healthy. CORS must therefore allow the web origin on `/health` too.
+- The Axios timeout for a scan is 60 s.
 
 ## Environment (`.env.example`)
 
-`PORT` (3001), `CORS_ORIGINS` (comma list, default `http://localhost:3000`; add LAN IP origin to test from a phone; `*` matches one hostname part, e.g. `https://bill-please-*-chatreejs-projects.vercel.app` for Vercel previews), `MAX_IMAGE_BYTES` (5 MB), `RATE_LIMIT_PER_MINUTE` (30), `TRUST_PROXY`, `SCANNER` (`mock`), `MOCK_MIN_DELAY_MS` / `MOCK_MAX_DELAY_MS` (5000–10000, simulates VLM latency), `LOG_LEVEL` (`INFO`; TRACE/DEBUG/INFO/WARN/ERROR/OFF).
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `PORT` | `3001` | |
+| `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated list. Add the LAN IP origin to test from a phone. `*` matches one part of a hostname, for example `https://bill-please-*-chatreejs-projects.vercel.app` for Vercel previews. |
+| `MAX_IMAGE_BYTES` | 5 MB | |
+| `RATE_LIMIT_PER_MINUTE` | `30` | |
+| `TRUST_PROXY` | | |
+| `SCANNER` | `mock` | |
+| `MOCK_MIN_DELAY_MS`, `MOCK_MAX_DELAY_MS` | `5000`, `10000` | Simulates VLM latency |
+| `LOG_LEVEL` | `INFO` | `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR` or `OFF` |
 
 ## Deployment
 
-Target is **Docker on the user's own server** (`Dockerfile`: `oven/bun:1-alpine`, prod deps only, non-root `bun` user, wget healthcheck). No docker-compose: the user never runs Docker locally; images are built by Jenkins (below). The Docker build has not been run yet.
+The target is Docker on the user's own server. The `Dockerfile` uses `oven/bun:1-alpine`, installs production dependencies only, runs as the non-root `bun` user and has a wget healthcheck. There is no docker-compose, because the user never runs Docker locally and Jenkins builds the images. Nobody has run the Docker build yet.
 
-CI/CD: Jenkins pipeline in `ci/Jenkinsfile` (copied from `../passwords`): Prepare Env (version from package.json; `develop` → `X.Y.Z-develop.<date>.<build>`) → Test (`oven/bun:1.4.3-alpine`, keep in sync with `.tool-versions`; check-types + tests with lcov coverage) → SonarQube (`sonar-project.properties`) → docker build → Trivy → push `chatreejs/bill-please-mcp` to Docker Hub → triggers gitops job `chatreejs/gitops/bill-please-mcp-manifest-{dev,prod}` with param `MCP_IMAGE_TAG` → Discord notify. No GitHub Actions CI (user's choice).
+The Jenkins pipeline in `ci/Jenkinsfile` is copied from `../passwords`. Its stages run in this order:
 
-## Status & roadmap
+1. Prepare Env reads the version from package.json. On `develop` it becomes `X.Y.Z-develop.<date>.<build>`.
+2. Test runs check-types and the tests with lcov coverage in `oven/bun:1.4.3-alpine`. Keep that tag in sync with `.tool-versions`.
+3. SonarQube scans with `sonar-project.properties`.
+4. It builds the Docker image, scans it with Trivy and pushes `chatreejs/bill-please-mcp` to Docker Hub.
+5. It triggers the gitops job `chatreejs/gitops/bill-please-mcp-manifest-{dev,prod}` with the parameter `MCP_IMAGE_TAG`, then notifies Discord.
 
-Done: REST + MCP endpoints, mock scanner, zod contract, CORS, rate limit, Spring Boot style logging with request ids, graceful SIGTERM shutdown, tests (17 passing), Dockerfile, web integration.
+There is no GitHub Actions CI, by the user's choice.
 
-Not done yet (likely next steps):
+## Status and roadmap
 
-1. Commit the code on `develop` (remote `git@github.com:chatreejs/bill-please-mcp`; `main` so far only holds README/LICENSE/CODE_OF_CONDUCT/CONTRIBUTING/SECURITY/.github). Code work happens on `develop`. Add commitlint/husky like bill-please (Conventional Commits, lowercase subject).
-2. **Real scanner**: AI provider not chosen yet (user picked "mock only for now"). Implement `ReceiptScanner` (e.g. Claude / Gemini / OpenAI vision with structured JSON output), register in `createScanner`, select via `SCANNER`. Prompt should extract per-item service/VAT %, unit price, negative discounts, Thai + English receipts.
-3. **Auth on `/mcp`** (API key or OAuth) before exposing a paid model publicly.
-4. Shared rate-limit store if running multiple replicas.
-5. Possible future MCP tool: create a bill-please bill from items and return a link that opens the web app pre-filled (would need an import-from-URL feature in bill-please web, which is currently localStorage-only).
-6. Lint/format tooling (bill-please uses eslint + prettier, single quotes, trailing commas).
+Done: REST and MCP endpoints, the mock scanner, the zod contract, CORS, rate limiting, Spring Boot style logging with request ids, graceful SIGTERM shutdown, tests (20 passing), the Dockerfile and the web integration.
+
+Likely next steps:
+
+1. Code work happens on `develop`, with `git@github.com:chatreejs/bill-please-mcp` as the remote. Add commitlint and husky like bill-please, for Conventional Commits with a lowercase subject.
+2. Build a real scanner. The user hasn't chosen an AI provider yet and picked "mock only for now". Implement `ReceiptScanner`, for example with Claude, Gemini or OpenAI vision and structured JSON output. Register it in `createScanner` and select it with `SCANNER`. The prompt should extract per-item service and VAT %, the unit price and negative discounts, from Thai and English receipts.
+3. Add auth on `/mcp`, an API key or OAuth, before exposing a paid model publicly.
+4. Use a shared rate-limit store if the server runs as several replicas.
+5. A possible future MCP tool could create a bill-please bill from the items and return a link that opens the web app pre-filled. That needs an import-from-URL feature in bill-please web, which only uses localStorage today.
+6. Add lint and format tooling. bill-please uses eslint and prettier, with single quotes and trailing commas.
+
+## Related repos
+
+- [bill-please-ocr](../bill-please-ocr) is the OCR step of the planned hybrid scanner. It is a Python service with FastAPI and PaddleOCR, and `POST /v1/ocr` returns receipt text lines. The user decided to keep OCR in Python and keep this Elysia server as the API, which will call the OCR service over HTTP. The design and roadmap are in the local `docs/` folder, which is gitignored and not pushed.
+- The shared on-prem LLM is the `llm-server` Helm chart in `../../gitlab.com/chatreedev-manifest/llm-server`, at `http://llm-server.llm-server.svc:8080/v1`.
