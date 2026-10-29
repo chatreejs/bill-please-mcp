@@ -10,7 +10,7 @@ const app = createApp(config, createScanner(config)).listen(config.port);
 
 log.info(
   `Started bill-please-mcp on port ${app.server?.port} ` +
-    `(scanner=${config.scanner}, logLevel=${config.logLevel}, bun=${Bun.version})`,
+    `(ocr=${config.ocrUrl}, llm=${config.llmModel}, logLevel=${config.logLevel}, bun=${Bun.version})`,
 );
 log.info('REST: POST /api/receipts/scan, MCP: /mcp (Streamable HTTP), health: GET /health');
 log.debug(`CORS origins: ${config.corsOrigins.join(', ')}`);

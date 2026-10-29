@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it } from 'bun:test';
 import { createApp } from '../src/app.ts';
 import { config } from '../src/config.ts';
 import { configureLogger } from '../src/logger.ts';
-import { MockReceiptScanner } from '../src/scanners/mock.ts';
 import type { ReceiptScanner } from '../src/scanners/index.ts';
 
 const testConfig = { ...config, rateLimitPerMinute: 1000, maxImageBytes: 1024 };
-const app = createApp(testConfig, new MockReceiptScanner(0, 0));
+const stubScanner: ReceiptScanner = {
+  scan: async () => ({ items: [{ name: 'Pad Thai', quantity: 2, price: 120, servicePercentage: 10, vatPercentage: 7 }] }),
+};
+const app = createApp(testConfig, stubScanner);
 const png = new File([new Uint8Array([137, 80, 78, 71])], 'bill.png', { type: 'image/png' });
 
 // Capture log output instead of printing it
@@ -154,7 +156,7 @@ describe('MCP /mcp', () => {
 describe('cors', () => {
   const corsApp = createApp(
     { ...testConfig, corsOrigins: ['http://localhost:3000', 'https://bill-please-*-chatreejs-projects.vercel.app'] },
-    new MockReceiptScanner(0, 0),
+    stubScanner,
   );
   const allowOrigin = async (origin: string) =>
     (await corsApp.handle(new Request('http://localhost/health', { headers: { origin } }))).headers.get(
