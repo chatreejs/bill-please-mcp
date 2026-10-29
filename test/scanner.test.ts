@@ -4,12 +4,12 @@ import { createApp } from '../src/app.ts';
 import { config } from '../src/config.ts';
 import { configureLogger } from '../src/logger.ts';
 import { UnreadableReceiptError } from '../src/scanners/errors.ts';
-import type { Extraction } from '../src/scanners/hybrid/extraction.ts';
-import { extractionJsonSchema } from '../src/scanners/hybrid/extraction.ts';
-import { HybridReceiptScanner } from '../src/scanners/hybrid/index.ts';
-import type { ReceiptExtractor } from '../src/scanners/hybrid/llm-client.ts';
-import type { OcrClient, OcrResult } from '../src/scanners/hybrid/ocr-client.ts';
-import { reconcile, toReceiptItems } from '../src/scanners/hybrid/postprocess.ts';
+import type { Extraction } from '../src/scanners/extraction.ts';
+import { extractionJsonSchema } from '../src/scanners/extraction.ts';
+import { OcrLlmReceiptScanner } from '../src/scanners/ocr-llm-scanner.ts';
+import type { ReceiptExtractor } from '../src/scanners/llm-client.ts';
+import type { OcrClient, OcrResult } from '../src/scanners/ocr-client.ts';
+import { reconcile, toReceiptItems } from '../src/scanners/postprocess.ts';
 
 let logs: string[] = [];
 beforeEach(() => {
@@ -107,10 +107,10 @@ describe('extraction JSON schema', () => {
   });
 });
 
-describe('HybridReceiptScanner', () => {
+describe('OcrLlmReceiptScanner', () => {
   it('sends the OCR text to the extractor and returns contract items', async () => {
     const extractor = new StubExtractor(extraction);
-    const scanner = new HybridReceiptScanner(stubOcr(ocrResult(RECEIPT_TEXT)), extractor, 0.6);
+    const scanner = new OcrLlmReceiptScanner(stubOcr(ocrResult(RECEIPT_TEXT)), extractor, 0.6);
 
     const result = await scanner.scan(image);
     expect(extractor.calls).toEqual([RECEIPT_TEXT]);
@@ -119,7 +119,7 @@ describe('HybridReceiptScanner', () => {
   });
 
   it('warns when the items do not add up to the printed total', async () => {
-    const scanner = new HybridReceiptScanner(
+    const scanner = new OcrLlmReceiptScanner(
       stubOcr(ocrResult(RECEIPT_TEXT)),
       new StubExtractor({ ...extraction, total: 999 }),
       0.6,
@@ -131,14 +131,14 @@ describe('HybridReceiptScanner', () => {
   it('skips the LLM when OCR finds nothing or is unsure', async () => {
     for (const ocr of [ocrResult(''), ocrResult(RECEIPT_TEXT, 0.3)]) {
       const extractor = new StubExtractor(extraction);
-      const scanner = new HybridReceiptScanner(stubOcr(ocr), extractor, 0.6);
+      const scanner = new OcrLlmReceiptScanner(stubOcr(ocr), extractor, 0.6);
       await expect(scanner.scan(image)).rejects.toBeInstanceOf(UnreadableReceiptError);
       expect(extractor.calls).toHaveLength(0);
     }
   });
 
   it('is unreadable when the LLM finds no items', async () => {
-    const scanner = new HybridReceiptScanner(
+    const scanner = new OcrLlmReceiptScanner(
       stubOcr(ocrResult(RECEIPT_TEXT)),
       new StubExtractor({ ...extraction, items: [] }),
       0.6,
@@ -149,7 +149,7 @@ describe('HybridReceiptScanner', () => {
   it('answers 422 on REST and a friendly tool error on MCP', async () => {
     const app = createApp(
       { ...config, rateLimitPerMinute: 1000 },
-      new HybridReceiptScanner(stubOcr(ocrResult('')), new StubExtractor(extraction), 0.6),
+      new OcrLlmReceiptScanner(stubOcr(ocrResult('')), new StubExtractor(extraction), 0.6),
     );
     const form = new FormData();
     form.append('image', new File([new Uint8Array([1])], 'bill.jpg', { type: 'image/jpeg' }));

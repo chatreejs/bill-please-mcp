@@ -1,4 +1,4 @@
-import type { ReceiptItem } from '../../schemas/receipt.ts';
+import type { ReceiptItem } from '../schemas/receipt.ts';
 import type { Extraction } from './extraction.ts';
 
 const round2 = (value: number) => Math.round(value * 100) / 100;

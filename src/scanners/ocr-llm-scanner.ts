@@ -1,18 +1,18 @@
-import { getLogger } from '../../logger.ts';
-import type { ReceiptScanResult } from '../../schemas/receipt.ts';
-import { UnreadableReceiptError } from '../errors.ts';
-import type { ReceiptImage, ReceiptScanner } from '../types.ts';
+import { getLogger } from '../logger.ts';
+import type { ReceiptScanResult } from '../schemas/receipt.ts';
+import { UnreadableReceiptError } from './errors.ts';
+import type { ReceiptImage, ReceiptScanner } from './types.ts';
 import type { ReceiptExtractor } from './llm-client.ts';
 import type { OcrClient } from './ocr-client.ts';
 import { reconcile, toReceiptItems } from './postprocess.ts';
 
-const log = getLogger('scanner.hybrid');
+const log = getLogger('scanner');
 
 /**
  * Reads the receipt text with bill-please-ocr, then has an LLM turn the text into items.
  * Only the OCR text reaches the LLM, never the photo.
  */
-export class HybridReceiptScanner implements ReceiptScanner {
+export class OcrLlmReceiptScanner implements ReceiptScanner {
   constructor(
     private readonly ocr: OcrClient,
     private readonly extractor: ReceiptExtractor,

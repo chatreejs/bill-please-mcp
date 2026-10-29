@@ -1,6 +1,6 @@
 import * as z from 'zod';
 
-import { getLogger } from '../../logger.ts';
+import { getLogger } from '../logger.ts';
 import { type Extraction, ExtractionSchema, extractionJsonSchema } from './extraction.ts';
 import { SYSTEM_PROMPT, userPrompt } from './prompt.ts';
 

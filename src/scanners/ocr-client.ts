@@ -1,8 +1,8 @@
 import * as z from 'zod';
 
-import { getLogger, logContext } from '../../logger.ts';
-import { UnreadableReceiptError } from '../errors.ts';
-import type { ReceiptImage } from '../types.ts';
+import { getLogger, logContext } from '../logger.ts';
+import { UnreadableReceiptError } from './errors.ts';
+import type { ReceiptImage } from './types.ts';
 
 const log = getLogger('scanner.ocr');
 
