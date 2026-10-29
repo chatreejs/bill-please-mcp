@@ -94,9 +94,9 @@ Follow these steps to set up Bill Please MCP on your local machine
 
 - **Keep the receipt contract in sync.** `src/schemas/receipt.ts` mirrors `IReceiptItem` / `IReceiptScanResult` in [bill-please](https://github.com/chatreejs/bill-please/blob/main/src/interfaces/receipt.ts). A change to the response shape needs a matching change in the web app.
 - **Always validate scanner output.** Go through `scanReceiptImage(scanner, image)` so a misbehaving model can never return malformed items.
-- **Adding a scanner** (e.g. a real vision model): implement `ReceiptScanner` from `src/scanners/types.ts`, register it in `createScanner` (`src/scanners/index.ts`) and document any new env vars in `.env.example`.
+- **Replacing the scanner.** Implement `ReceiptScanner` from `src/scanners/types.ts`, return it from `createScanner` in `src/scanners/index.ts`, and document any new env vars in `.env.example`.
 - **New routes** follow the `xxxRoutes(config, scanner)` plugin pattern so they can be tested with an injected scanner.
-- **Tests** call `app.handle(new Request(...))` with `new MockReceiptScanner(0, 0)`; add tests for any new behavior in `test/`.
+- **Tests use a stub scanner.** They call `app.handle(new Request(...))` with a stub `ReceiptScanner`. Add tests for any new behavior in `test/`.
 - **Never commit secrets** (API keys, `.env`).
 
 ---

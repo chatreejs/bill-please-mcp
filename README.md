@@ -50,20 +50,15 @@ curl -F image=@receipt.jpg http://localhost:3001/api/receipts/scan
 To try the MCP endpoint, run the MCP Inspector with `bun run inspect`. Choose the
 Streamable HTTP transport and the URL `http://localhost:3001/mcp`.
 
-## Scanners
+## Scanner
 
-`SCANNER` selects the implementation of the `ReceiptScanner` interface in
-`src/scanners/types.ts`.
+The scanner sends the photo to [bill-please-ocr](https://github.com/chatreejs/bill-please-ocr)
+at `OCR_URL`, then sends only the OCR text to an OpenAI compatible LLM at `LLM_URL`.
+In the cluster that LLM is the shared llama.cpp `llm-server`. A receipt with no
+readable text gets a 422 without an LLM call.
 
-- `mock` returns a random sample receipt after a delay between `MOCK_MIN_DELAY_MS`
-  and `MOCK_MAX_DELAY_MS`.
-- `hybrid` sends the photo to [bill-please-ocr](https://github.com/chatreejs/bill-please-ocr)
-  at `OCR_URL`, then sends only the OCR text to an OpenAI compatible LLM at `LLM_URL`.
-  In the cluster that LLM is the shared llama.cpp `llm-server`. A receipt with no
-  readable text gets a 422 without an LLM call.
-
-To run the hybrid scanner locally, start bill-please-ocr on port 8000, port-forward the
-LLM to port 8080 and set `SCANNER=hybrid`:
+To run it locally, start bill-please-ocr on port 8000 and port-forward the LLM to
+port 8080:
 
 ```bash
 zsh -c 'trap "kill 0" INT TERM EXIT
@@ -72,8 +67,8 @@ kubectl -n llm-server port-forward svc/llm-server 8080:8080 &
 bun dev'
 ```
 
-To add another scanner, implement `ReceiptScanner` and register it in `createScanner`
-in `src/scanners/index.ts`.
+To replace the scanner, implement the `ReceiptScanner` interface in
+`src/scanners/types.ts` and return it from `createScanner` in `src/scanners/index.ts`.
 
 ## Logging
 
@@ -87,7 +82,7 @@ thread name:
 
 `LOG_LEVEL` sets the level to `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR` or `OFF`.
 The default is `INFO`. Every response has an `X-Request-Id` header. Send your own
-`X-Request-Id` to find the same request in the logs of several services. The hybrid
+`X-Request-Id` to find the same request in the logs of several services. The
 scanner passes it on to bill-please-ocr.
 
 ## Docker
