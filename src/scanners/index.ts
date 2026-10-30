@@ -17,7 +17,10 @@ export type { ReceiptImage, ReceiptScanner } from './types.ts';
 export const createScanner = (config: Config): ReceiptScanner =>
   new OcrLlmReceiptScanner(
     new HttpOcrClient(config.ocrUrl, config.ocrTimeoutMs),
-    new OpenAiCompatibleExtractor(config.llmUrl, config.llmModel, config.llmTimeoutMs, config.llmApiKey),
+    new OpenAiCompatibleExtractor(config.llmUrl, config.llmModel, config.llmTimeoutMs, {
+      apiKey: config.llmApiKey,
+      reasoningEffort: config.llmReasoningEffort,
+    }),
     config.ocrMinConfidence,
   );
 

@@ -28,6 +28,9 @@ export const config = {
   llmModel: Bun.env.LLM_MODEL ?? 'qwen3-4b-instruct-2507',
   llmApiKey: Bun.env.LLM_API_KEY || undefined,
   llmTimeoutMs: int(Bun.env.LLM_TIMEOUT_MS, 45000),
+  // Sent as reasoning_effort. none stops thinking models from reasoning before they answer.
+  // Empty omits the field, because some APIs reject it on models without reasoning.
+  llmReasoningEffort: Bun.env.LLM_REASONING_EFFORT ?? 'none',
   logLevel: parseLogLevel(Bun.env.LOG_LEVEL),
 };
 

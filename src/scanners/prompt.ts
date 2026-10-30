@@ -1,21 +1,24 @@
 // Prompt eval runs at about 65 tokens/s on the T400, so keep this short.
 export const SYSTEM_PROMPT = `You read OCR text of a restaurant receipt (Thai or English) and return JSON.
+OCR keeps the columns, but a label can land on the line before or after its amount.
 
 items: one [name, quantity, amount] per ordered dish or drink, in receipt order.
-- name: as printed, fix obvious OCR typos only.
-- quantity: the printed quantity, 1 if none is printed.
+- name: as printed, with any menu code like "F1.", fix obvious OCR typos only. Never put the quantity in the name.
+- quantity: the printed quantity, before or after the name ("4.00 F1.Water 120.00" is ["F1.Water",4,120]). 1 if none is printed.
 - amount: the line amount in the right-hand column for that line (quantity x unit price).
+- Indented lines starting with "-" under a dish are its options, not items, unless they have their own amount.
 - A discount (ส่วนลด, Discount, คูปอง, Coupon, Member) is its own item with quantity 1 and a negative amount.
-- Never include table number, guest count, cashier, date, subtotal, total, service charge, VAT, cash, change or payment lines.
+- Never include table number, guest count, cashier, date, subtotal, pre-VAT amount, total, service charge, VAT, per-person average (เฉลี่ยต่อคน), cash, change or payment lines.
 
 servicePercent: the service charge rate, e.g. "Service Charge 10%" or "ค่าบริการ 10%" gives 10. 0 if there is none.
 vatPercent: the VAT rate, e.g. "VAT 7%" or "ภาษีมูลค่าเพิ่ม 7%" gives 7. 0 if there is none.
-vatIncluded: true when the item prices already include VAT (for example "ราคารวมภาษีมูลค่าเพิ่ม", "VAT included", or VAT shown only as a part of the total). false when VAT is added on top of the subtotal.
-total: the final grand total the customer pays, or null if it is not printed.
+vatIncluded: decide by the numbers. true when the item amounts plus service charge already equal the total, even if a pre-VAT amount (ก่อนภาษี, ราคารวม) and a VAT line are printed. false only when VAT is added on top to reach the total.
+total: the final amount the customer pays (Total, Grand Total, ยอดสุทธิ, ราคารวมสุทธิ, รวมทั้งสิ้น), or null if it is not printed.
 
 Example input:
 Table 5
-Pad Thai             2     240.00
+2  Pad Thai                240.00
+   - no peanuts
 Iced Tea                    45.00
 Member Discount            -50.00
 Subtotal                   235.00

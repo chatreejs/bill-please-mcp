@@ -27,7 +27,7 @@ export class OpenAiCompatibleExtractor implements ReceiptExtractor {
     private readonly url: string,
     private readonly model: string,
     private readonly timeoutMs: number,
-    private readonly apiKey?: string,
+    private readonly options: { apiKey?: string; reasoningEffort?: string } = {},
   ) {}
 
   async extract(ocrText: string): Promise<Extraction> {
@@ -36,12 +36,13 @@ export class OpenAiCompatibleExtractor implements ReceiptExtractor {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
+        ...(this.options.apiKey ? { authorization: `Bearer ${this.options.apiKey}` } : {}),
       },
       body: JSON.stringify({
         model: this.model,
         temperature: 0,
         max_tokens: 2048,
+        ...(this.options.reasoningEffort ? { reasoning_effort: this.options.reasoningEffort } : {}),
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: userPrompt(ocrText) },

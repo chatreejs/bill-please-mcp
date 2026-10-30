@@ -4,7 +4,7 @@ import { UnreadableReceiptError } from './errors.ts';
 import type { ReceiptImage, ReceiptScanner } from './types.ts';
 import type { ReceiptExtractor } from './llm-client.ts';
 import type { OcrClient } from './ocr-client.ts';
-import { reconcile, toReceiptItems } from './postprocess.ts';
+import { reconcile, resolveVatIncluded, toReceiptItems } from './postprocess.ts';
 
 const log = getLogger('scanner');
 
@@ -34,14 +34,20 @@ export class OcrLlmReceiptScanner implements ReceiptScanner {
       );
     }
 
-    const extraction = await this.extractor.extract(ocr.text);
+    const raw = await this.extractor.extract(ocr.text);
+    const extraction = resolveVatIncluded(raw);
+    if (extraction !== raw) {
+      log.info(`Set vatIncluded to ${extraction.vatIncluded}, because only that matches the printed total`);
+    }
     const items = toReceiptItems(extraction);
     if (items.length === 0) {
       throw new UnreadableReceiptError('The LLM found no items in the receipt text');
     }
 
     const check = reconcile(items, extraction.total);
-    if (check.matches) {
+    if (check.printedTotal === null) {
+      log.warn(`Extracted ${items.length} items, total ${check.computedTotal}, but found no printed total to check`);
+    } else if (check.matches) {
       log.info(`Extracted ${items.length} items, total ${check.computedTotal} (printed ${check.printedTotal})`);
     } else {
       log.warn(

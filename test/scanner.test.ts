@@ -9,7 +9,7 @@ import { extractionJsonSchema } from '../src/scanners/extraction.ts';
 import { OcrLlmReceiptScanner } from '../src/scanners/ocr-llm-scanner.ts';
 import type { ReceiptExtractor } from '../src/scanners/llm-client.ts';
 import type { OcrClient, OcrResult } from '../src/scanners/ocr-client.ts';
-import { reconcile, toReceiptItems } from '../src/scanners/postprocess.ts';
+import { reconcile, resolveVatIncluded, toReceiptItems } from '../src/scanners/postprocess.ts';
 
 let logs: string[] = [];
 beforeEach(() => {
@@ -90,6 +90,28 @@ describe('toReceiptItems', () => {
       { name: 'Rice', quantity: 3, price: 33.33, servicePercentage: 10, vatPercentage: 7 },
     ]);
   });
+
+  it('moves a quantity column the model left in the name into the quantity', () => {
+    const items = toReceiptItems({
+      ...extraction,
+      items: [
+        ['4.00 F1.Water', 4, 120],
+        ['2.00 I11.Squid', 1, 590],
+        ['2 Pad Thai', 2, 240],
+        ['3 Cheese Pizza', 1, 300],
+        ['ไข่มะตูม 1ฟอง', 1, 25],
+      ],
+      servicePercent: 0,
+      vatPercent: 0,
+    });
+    expect(items.map(({ name, quantity, price }) => [name, quantity, price])).toEqual([
+      ['F1.Water', 4, 30],
+      ['I11.Squid', 2, 295],
+      ['Pad Thai', 2, 120],
+      ['3 Cheese Pizza', 1, 300],
+      ['ไข่มะตูม 1ฟอง', 1, 25],
+    ]);
+  });
 });
 
 describe('reconcile', () => {
@@ -97,7 +119,42 @@ describe('reconcile', () => {
     const items = toReceiptItems(extraction);
     expect(reconcile(items, 164.78)).toEqual({ computedTotal: 164.78, printedTotal: 164.78, matches: true });
     expect(reconcile(items, 200).matches).toBe(false);
-    expect(reconcile(items, null).matches).toBe(true);
+    expect(reconcile(items, null).matches).toBe(false);
+  });
+});
+
+describe('resolveVatIncluded', () => {
+  // bill-4: ราคารวม 315.89, VAT 7% 22.11, ราคารวมสุทธิ 338.00, items 129 + 209
+  const vatInPrices: Extraction = {
+    items: [
+      ['สเต๊กไก่ซอสแจ่วปลาร้า (P)', 1, 129],
+      ['สเต๊กไก่สไปซี่', 1, 209],
+    ],
+    servicePercent: 0,
+    vatPercent: 7,
+    vatIncluded: false,
+    total: 338,
+  };
+
+  it('treats VAT as included when only that matches the printed total', () => {
+    expect(resolveVatIncluded(vatInPrices).vatIncluded).toBe(true);
+    expect(toReceiptItems(resolveVatIncluded(vatInPrices))[0]).toEqual({
+      name: 'สเต๊กไก่ซอสแจ่วปลาร้า (P)',
+      quantity: 1,
+      price: 129,
+    });
+  });
+
+  it('treats VAT as added when only that matches the printed total', () => {
+    expect(resolveVatIncluded({ ...extraction, vatIncluded: true }).vatIncluded).toBe(false);
+  });
+
+  it('keeps the model reading when it matches, or when neither does', () => {
+    expect(resolveVatIncluded(extraction)).toBe(extraction);
+    const wrong = { ...vatInPrices, total: 500 };
+    expect(resolveVatIncluded(wrong)).toBe(wrong);
+    const noTotal = { ...vatInPrices, total: null };
+    expect(resolveVatIncluded(noTotal)).toBe(noTotal);
   });
 });
 
@@ -126,6 +183,24 @@ describe('OcrLlmReceiptScanner', () => {
     );
     await scanner.scan(image);
     expect(logs.find((line) => line.includes('the receipt says 999'))).toContain('WARN');
+  });
+
+  it('fixes vatIncluded from the printed total and warns when there is none', async () => {
+    const fixed = new OcrLlmReceiptScanner(
+      stubOcr(ocrResult(RECEIPT_TEXT)),
+      new StubExtractor({ ...extraction, vatIncluded: true }),
+      0.6,
+    );
+    expect((await fixed.scan(image)).items[0]!.vatPercentage).toBe(7);
+    expect(logs.some((line) => line.includes('Set vatIncluded to false'))).toBe(true);
+
+    const unchecked = new OcrLlmReceiptScanner(
+      stubOcr(ocrResult(RECEIPT_TEXT)),
+      new StubExtractor({ ...extraction, total: null }),
+      0.6,
+    );
+    await unchecked.scan(image);
+    expect(logs.find((line) => line.includes('found no printed total'))).toContain('WARN');
   });
 
   it('skips the LLM when OCR finds nothing or is unsure', async () => {
