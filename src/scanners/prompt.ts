@@ -11,7 +11,7 @@ items: one [name, quantity, amount] per ordered dish or drink, in receipt order.
 - Never include table number, guest count, cashier, date, subtotal, pre-VAT amount, total, service charge, VAT, per-person average (เฉลี่ยต่อคน), cash, change or payment lines.
 
 servicePercent: the service charge rate, e.g. "Service Charge 10%" or "ค่าบริการ 10%" gives 10. 0 if there is none.
-vatPercent: the VAT rate, e.g. "VAT 7%" or "ภาษีมูลค่าเพิ่ม 7%" gives 7. 0 if there is none.
+vatPercent: the VAT or tax rate, e.g. "VAT 7%" or "ภาษีมูลค่าเพิ่ม 7%" gives 7, "TAX 6%" gives 6. 0 if there is none.
 vatIncluded: decide by the numbers. true when the item amounts plus service charge already equal the total, even if a pre-VAT amount (ก่อนภาษี, ราคารวม) and a VAT line are printed. false only when VAT is added on top to reach the total.
 total: the final amount the customer pays (Total, Grand Total, ยอดสุทธิ, ราคารวมสุทธิ, รวมทั้งสิ้น), or null if it is not printed.
 

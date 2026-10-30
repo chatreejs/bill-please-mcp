@@ -1,15 +1,15 @@
-import { beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { createApp } from '../src/app.ts';
 import { config } from '../src/config.ts';
 import { configureLogger } from '../src/logger.ts';
 import { UnreadableReceiptError } from '../src/scanners/errors.ts';
 import type { Extraction } from '../src/scanners/extraction.ts';
-import { extractionJsonSchema } from '../src/scanners/extraction.ts';
+import { extractionGrammar, extractionJsonSchema } from '../src/scanners/extraction.ts';
 import { OcrLlmReceiptScanner } from '../src/scanners/ocr-llm-scanner.ts';
-import type { ReceiptExtractor } from '../src/scanners/llm-client.ts';
+import { OpenAiCompatibleExtractor, type ReceiptExtractor } from '../src/scanners/llm-client.ts';
 import type { OcrClient, OcrResult } from '../src/scanners/ocr-client.ts';
-import { reconcile, resolveVatIncluded, toReceiptItems } from '../src/scanners/postprocess.ts';
+import { reconcile, resolveRates, toReceiptItems } from '../src/scanners/postprocess.ts';
 
 let logs: string[] = [];
 beforeEach(() => {
@@ -123,8 +123,9 @@ describe('reconcile', () => {
   });
 });
 
-describe('resolveVatIncluded', () => {
+describe('resolveRates', () => {
   // bill-4: ราคารวม 315.89, VAT 7% 22.11, ราคารวมสุทธิ 338.00, items 129 + 209
+  const bill4Text = 'ราคารวม: 315.89\nVAT 7% 22.11\nราคารวมสุทธิ: 338.00';
   const vatInPrices: Extraction = {
     items: [
       ['สเต๊กไก่ซอสแจ่วปลาร้า (P)', 1, 129],
@@ -137,30 +138,91 @@ describe('resolveVatIncluded', () => {
   };
 
   it('treats VAT as included when only that matches the printed total', () => {
-    expect(resolveVatIncluded(vatInPrices).vatIncluded).toBe(true);
-    expect(toReceiptItems(resolveVatIncluded(vatInPrices))[0]).toEqual({
-      name: 'สเต๊กไก่ซอสแจ่วปลาร้า (P)',
-      quantity: 1,
-      price: 129,
-    });
+    const resolved = resolveRates(vatInPrices, bill4Text);
+    expect(resolved.vatIncluded).toBe(true);
+    expect(toReceiptItems(resolved)[0]).toEqual({ name: 'สเต๊กไก่ซอสแจ่วปลาร้า (P)', quantity: 1, price: 129 });
   });
 
   it('treats VAT as added when only that matches the printed total', () => {
-    expect(resolveVatIncluded({ ...extraction, vatIncluded: true }).vatIncluded).toBe(false);
+    expect(resolveRates({ ...extraction, vatIncluded: true }, RECEIPT_TEXT).vatIncluded).toBe(false);
   });
 
-  it('keeps the model reading when it matches, or when neither does', () => {
-    expect(resolveVatIncluded(extraction)).toBe(extraction);
+  it('uses a tax rate printed in the OCR text when the model returns none', () => {
+    // bill-2: SUBTOTAL $103.35, TAX 6% $6.20, TOTAL $109.55
+    const bill2: Extraction = {
+      items: [
+        ['Pasta with cheese', 2, 71],
+        ['Chicken Pitzza', 1, 24.55],
+        ['Drinks', 4, 7.8],
+      ],
+      servicePercent: 0,
+      vatPercent: 0,
+      vatIncluded: false,
+      total: 109.55,
+    };
+    const text = 'SUBTOTAL                $103.35\nTAX 6%                   $6.20\nTOTAL                   $109.55';
+    expect(resolveRates(bill2, text)).toMatchObject({ vatPercent: 6, vatIncluded: false });
+    expect(resolveRates({ ...bill2, vatPercent: 0 }, 'TOTAL $109.55')).toMatchObject({ vatPercent: 0 });
+  });
+
+  it('finds a service charge printed in Thai or English', () => {
+    const noRates = { ...extraction, servicePercent: 0, vatPercent: 0 };
+    expect(resolveRates(noRates, RECEIPT_TEXT)).toMatchObject({ servicePercent: 10, vatPercent: 7 });
+    expect(resolveRates(noRates, 'Service Charge 10%\nVAT 7%')).toMatchObject({ servicePercent: 10, vatPercent: 7 });
+  });
+
+  it('keeps the model reading when it matches, or when nothing does', () => {
+    expect(resolveRates(extraction, RECEIPT_TEXT)).toBe(extraction);
     const wrong = { ...vatInPrices, total: 500 };
-    expect(resolveVatIncluded(wrong)).toBe(wrong);
+    expect(resolveRates(wrong, bill4Text)).toBe(wrong);
     const noTotal = { ...vatInPrices, total: null };
-    expect(resolveVatIncluded(noTotal)).toBe(noTotal);
+    expect(resolveRates(noTotal, bill4Text)).toBe(noTotal);
   });
 });
 
 describe('extraction JSON schema', () => {
   it('has no boolean subschemas, which llama.cpp rejects', () => {
     expect(JSON.stringify(extractionJsonSchema)).not.toContain('"items":false');
+  });
+});
+
+describe('OpenAiCompatibleExtractor', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  // Answers like llama-server and keeps the request body
+  const captureRequest = () => {
+    const bodies: Record<string, unknown>[] = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return Response.json({ choices: [{ message: { content: JSON.stringify(extraction) }, finish_reason: 'stop' }] });
+    }) as unknown as typeof fetch;
+    return bodies;
+  };
+
+  it('sends the compact grammar and reasoning_effort to llama.cpp', async () => {
+    const bodies = captureRequest();
+    const extractor = new OpenAiCompatibleExtractor('http://llm/v1', 'm', 1000, {
+      reasoningEffort: 'none',
+      outputFormat: 'gbnf',
+    });
+    expect(await extractor.extract(RECEIPT_TEXT)).toEqual(extraction);
+    expect(bodies[0]).toMatchObject({ grammar: extractionGrammar, reasoning_effort: 'none' });
+    expect(bodies[0]).not.toHaveProperty('response_format');
+  });
+
+  it('sends the JSON schema, and no reasoning_effort when it is empty', async () => {
+    const bodies = captureRequest();
+    const extractor = new OpenAiCompatibleExtractor('http://llm/v1', 'm', 1000, {
+      reasoningEffort: '',
+      outputFormat: 'json_schema',
+    });
+    await extractor.extract(RECEIPT_TEXT);
+    expect(bodies[0]).toMatchObject({ response_format: { type: 'json_schema' } });
+    expect(bodies[0]).not.toHaveProperty('grammar');
+    expect(bodies[0]).not.toHaveProperty('reasoning_effort');
   });
 });
 
@@ -185,14 +247,14 @@ describe('OcrLlmReceiptScanner', () => {
     expect(logs.find((line) => line.includes('the receipt says 999'))).toContain('WARN');
   });
 
-  it('fixes vatIncluded from the printed total and warns when there is none', async () => {
+  it('fixes the rates from the printed total and warns when there is none', async () => {
     const fixed = new OcrLlmReceiptScanner(
       stubOcr(ocrResult(RECEIPT_TEXT)),
       new StubExtractor({ ...extraction, vatIncluded: true }),
       0.6,
     );
     expect((await fixed.scan(image)).items[0]!.vatPercentage).toBe(7);
-    expect(logs.some((line) => line.includes('Set vatIncluded to false'))).toBe(true);
+    expect(logs.some((line) => line.includes('vatPercent=7 vatIncluded=false'))).toBe(true);
 
     const unchecked = new OcrLlmReceiptScanner(
       stubOcr(ocrResult(RECEIPT_TEXT)),

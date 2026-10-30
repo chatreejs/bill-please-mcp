@@ -1,7 +1,7 @@
 import * as z from 'zod';
 
 import { getLogger } from '../logger.ts';
-import { type Extraction, ExtractionSchema, extractionJsonSchema } from './extraction.ts';
+import { type Extraction, ExtractionSchema, extractionGrammar, extractionJsonSchema } from './extraction.ts';
 import { SYSTEM_PROMPT, userPrompt } from './prompt.ts';
 
 const log = getLogger('scanner.llm');
@@ -19,15 +19,19 @@ export interface ReceiptExtractor {
 
 /**
  * Extractor for any OpenAI compatible chat completions API, such as llama.cpp
- * llama-server. The JSON schema in `response_format` constrains decoding, so the
- * model can only produce JSON in the extraction shape.
+ * llama-server. A GBNF `grammar` (llama.cpp only) or the JSON schema in `response_format`
+ * constrains decoding, so the model can only produce JSON in the extraction shape.
  */
 export class OpenAiCompatibleExtractor implements ReceiptExtractor {
   constructor(
     private readonly url: string,
     private readonly model: string,
     private readonly timeoutMs: number,
-    private readonly options: { apiKey?: string; reasoningEffort?: string } = {},
+    private readonly options: {
+      apiKey?: string;
+      reasoningEffort?: string;
+      outputFormat?: 'gbnf' | 'json_schema';
+    } = {},
   ) {}
 
   async extract(ocrText: string): Promise<Extraction> {
@@ -47,10 +51,14 @@ export class OpenAiCompatibleExtractor implements ReceiptExtractor {
           { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: userPrompt(ocrText) },
         ],
-        response_format: {
-          type: 'json_schema',
-          json_schema: { name: 'receipt', strict: true, schema: extractionJsonSchema },
-        },
+        ...(this.options.outputFormat === 'gbnf'
+          ? { grammar: extractionGrammar }
+          : {
+              response_format: {
+                type: 'json_schema',
+                json_schema: { name: 'receipt', strict: true, schema: extractionJsonSchema },
+              },
+            }),
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
     });

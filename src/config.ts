@@ -31,6 +31,8 @@ export const config = {
   // Sent as reasoning_effort. none stops thinking models from reasoning before they answer.
   // Empty omits the field, because some APIs reject it on models without reasoning.
   llmReasoningEffort: Bun.env.LLM_REASONING_EFFORT ?? 'none',
+  // gbnf sends a compact grammar that only llama.cpp accepts. json_schema works with any OpenAI compatible API.
+  llmOutputFormat: Bun.env.LLM_OUTPUT_FORMAT === 'json_schema' ? ('json_schema' as const) : ('gbnf' as const),
   logLevel: parseLogLevel(Bun.env.LOG_LEVEL),
 };
 

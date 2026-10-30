@@ -20,6 +20,7 @@ export const createScanner = (config: Config): ReceiptScanner =>
     new OpenAiCompatibleExtractor(config.llmUrl, config.llmModel, config.llmTimeoutMs, {
       apiKey: config.llmApiKey,
       reasoningEffort: config.llmReasoningEffort,
+      outputFormat: config.llmOutputFormat,
     }),
     config.ocrMinConfidence,
   );

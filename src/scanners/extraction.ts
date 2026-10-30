@@ -33,3 +33,17 @@ export const extractionJsonSchema = dropBooleanItems(z.toJSONSchema(ExtractionSc
   string,
   unknown
 >;
+
+/**
+ * The same shape as a llama.cpp GBNF grammar, sent in place of json_schema when
+ * LLM_OUTPUT_FORMAT is gbnf. Under json_schema the model adds newlines and indentation and
+ * writes 120.00 for 120, and Qwen spends a token on each digit and space run. On the T400 this
+ * grammar cut the output on bill-3 (15 items) from 398 to 337 tokens, and the scan from 22.7 s
+ * to 19.5 s. Numbers have at most 7 integer digits and 2 decimals, so the model can't write
+ * 338.00000000000006. A rule that forbade a trailing zero made the model write 338.01 for 338.00.
+ * Keep the keys in ExtractionSchema order.
+ */
+export const extractionGrammar = String.raw`root ::= "{\"items\":[" (item ("," item)*)? "],\"servicePercent\":" num ",\"vatPercent\":" num ",\"vatIncluded\":" ("true" | "false") ",\"total\":" (num | "null") "}"
+item ::= "[" str "," num "," num "]"
+str ::= "\"" ([^"\\\x7F\x00-\x1F] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F]{4}))* "\""
+num ::= "-"? ("0" | [1-9] [0-9]{0,6}) ("." [0-9] [0-9]?)?`;

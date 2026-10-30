@@ -78,14 +78,35 @@ export const reconcile = (items: ReceiptItem[], printedTotal: number | null): Re
   };
 };
 
+// Rates printed on the receipt, e.g. "TAX 6%", "VAT 7%", "ภาษีมูลค่าเพิ่ม 7%" or "Service Charge 10%"
+const PRINTED_TAX = /(?:\bVAT|\bTAX|ภาษี\S*)\s*:?\s*(\d{1,2}(?:\.\d+)?)\s*%/giu;
+const PRINTED_SERVICE = /(?:\bservice(?:\s+charge)?|\bS\.?C\.?|ค่าบริการ)\s*:?\s*(\d{1,2}(?:\.\d+)?)\s*%/giu;
+
+const printedRates = (text: string, pattern: RegExp) => [...text.matchAll(pattern)].map((match) => Number(match[1]));
+
 /**
- * Receipts such as "ราคารวม 315.89, VAT 7% 22.11, ราคารวมสุทธิ 338.00" print a VAT line even
- * though the item prices already include it, and small models often read that as VAT on top.
- * When the model's reading doesn't match the printed total and the opposite reading does, use the opposite.
+ * Small models misread the receipt-level rates in two ways. Receipts such as "ราคารวม 315.89,
+ * VAT 7% 22.11, ราคารวมสุทธิ 338.00" print a VAT line although the item prices already include
+ * it, and the model reads that as VAT on top. On bill-2 Qwen3 4B returns no rate for "TAX 6%".
+ * When the model's reading doesn't match the printed total, this tries the rates printed in the
+ * OCR text with VAT on top and included, and keeps the first reading that matches.
  */
-export const resolveVatIncluded = (extraction: Extraction): Extraction => {
-  if (extraction.total === null || percent(extraction.vatPercent) === 0) return extraction;
-  if (reconcile(toReceiptItems(extraction), extraction.total).matches) return extraction;
-  const flipped = { ...extraction, vatIncluded: !extraction.vatIncluded };
-  return reconcile(toReceiptItems(flipped), extraction.total).matches ? flipped : extraction;
+export const resolveRates = (extraction: Extraction, ocrText: string): Extraction => {
+  if (extraction.total === null) return extraction;
+  const matches = (candidate: Extraction) =>
+    reconcile(toReceiptItems(candidate), extraction.total).matches;
+  if (matches(extraction)) return extraction;
+
+  const unique = (values: number[]) => [...new Set(values.map(percent))];
+  const services = unique([extraction.servicePercent, ...printedRates(ocrText, PRINTED_SERVICE), 0]);
+  const vats = unique([extraction.vatPercent, ...printedRates(ocrText, PRINTED_TAX), 0]);
+  for (const servicePercent of services) {
+    for (const vatPercent of vats) {
+      for (const vatIncluded of [extraction.vatIncluded, !extraction.vatIncluded]) {
+        const candidate = { ...extraction, servicePercent, vatPercent, vatIncluded };
+        if (matches(candidate)) return candidate;
+      }
+    }
+  }
+  return extraction;
 };

@@ -40,10 +40,10 @@ src/
     errors.ts         UnreadableReceiptError: no usable text in the image (REST 422)
     ocr-llm-scanner.ts OcrLlmReceiptScanner: OCR, then LLM, then post-processing and a total check
     ocr-client.ts     HttpOcrClient for bill-please-ocr POST /v1/ocr, forwards X-Request-Id
-    llm-client.ts     OpenAiCompatibleExtractor: chat completions with a json_schema response_format
-    extraction.ts     compact LLM output schema (zod) and its JSON schema for llama.cpp
+    llm-client.ts     OpenAiCompatibleExtractor: chat completions with a GBNF grammar or a json_schema response_format
+    extraction.ts     compact LLM output schema (zod), its JSON schema and its GBNF grammar
     prompt.ts         system prompt with one short example
-    postprocess.ts    toReceiptItems (compact output to the contract), resolveVatIncluded and reconcile (vs printed total)
+    postprocess.ts    toReceiptItems (compact output to the contract), resolveRates and reconcile (vs printed total)
   routes/receipts.ts  REST scan route: 415 for a bad mime type, 413 for size, 502 for a scanner failure
   mcp/
     server.ts         createMcpServer() registers the tool `scan_receipt`
@@ -59,7 +59,7 @@ Key points:
 - **Scanner.** `OcrLlmReceiptScanner` is the only scanner. It sends the photo to bill-please-ocr and only the OCR text to the LLM.
   - The LLM returns a compact shape to save tokens: items as `[name, quantity, line amount]`, plus receipt-level `servicePercent`, `vatPercent`, `vatIncluded` and the printed `total`. `toReceiptItems` divides the amount by the quantity and puts the receipt rates on every item, discounts included, so the web total equals the receipt total.
   - A VAT-inclusive receipt keeps its printed prices and gets no `vatPercentage`. This follows the recommendation in the local docs. The user hasn't confirmed it yet.
-  - Small models get `vatIncluded` wrong on receipts that print a pre-VAT amount and a VAT line although the prices include VAT (bill-4 in the ocr fixtures). `resolveVatIncluded` flips it when only the opposite reading matches the printed total. In the local benchmark every model got the flag wrong on bill-4 or bill-2 in all 3 runs, so in practice this check decides.
+  - Small models misread the receipt-level rates. They read a VAT-inclusive receipt that prints a pre-VAT amount and a VAT line as VAT on top (bill-4 in the ocr fixtures), and Qwen3 4B returns no rate for "TAX 6%" (bill-2). When the items don't add up to the printed total, `resolveRates` tries the service and tax rates printed in the OCR text, with VAT on top and included, and keeps the first reading that matches. In the local benchmark every model got `vatIncluded` wrong on bill-4 or bill-2 in all 3 runs, so in practice this check decides.
   - `toReceiptItems` moves a quantity column the model left in the name ("4.00 F1.Water") into the quantity.
   - `reconcile` prices the items the way the web does and logs WARN when they don't match the printed total, or when there is no printed total, which counts as unchecked. There is no retry or fallback yet.
   - When OCR finds no lines, the mean confidence is under `OCR_MIN_CONFIDENCE`, or the LLM finds no items, the scanner throws `UnreadableReceiptError` without calling the LLM. REST answers 422, and MCP returns a friendly `isError`.
@@ -119,6 +119,7 @@ How the web calls this server, in `../bill-please/src/utils/receipt.util.ts`:
 | `LLM_URL`, `LLM_MODEL`, `LLM_TIMEOUT_MS` | `http://localhost:8080/v1`, `qwen3-4b-instruct-2507`, `45000` | Any OpenAI compatible API |
 | `LLM_API_KEY` | | Bearer token, only for APIs that need one |
 | `LLM_REASONING_EFFORT` | `none` | Sent as `reasoning_effort`. `none` turns off reasoning in thinking models such as Gemma 4, which was 5 to 20 times slower with reasoning and no more accurate. Leave it empty for APIs that reject the field |
+| `LLM_OUTPUT_FORMAT` | `gbnf` | `gbnf` sends `extractionGrammar`, a compact GBNF grammar that only llama.cpp accepts. On the T400 it cut the average output from 164 to 129 tokens. Set `json_schema` for any other OpenAI compatible API |
 | `LOG_LEVEL` | `INFO` | `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR` or `OFF` |
 
 ## Deployment
@@ -139,7 +140,7 @@ There is no GitHub Actions CI, by the user's choice.
 
 ## Status and roadmap
 
-Done: REST and MCP endpoints, the OCR and LLM scanner, the zod contract, CORS, rate limiting, Spring Boot style logging with request ids, graceful SIGTERM shutdown, tests (35 passing), the Dockerfile and the web integration.
+Done: REST and MCP endpoints, the OCR and LLM scanner, the zod contract, CORS, rate limiting, Spring Boot style logging with request ids, graceful SIGTERM shutdown, tests (39 passing), the Dockerfile and the web integration.
 
 Likely next steps:
 

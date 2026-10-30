@@ -4,7 +4,7 @@ import { UnreadableReceiptError } from './errors.ts';
 import type { ReceiptImage, ReceiptScanner } from './types.ts';
 import type { ReceiptExtractor } from './llm-client.ts';
 import type { OcrClient } from './ocr-client.ts';
-import { reconcile, resolveVatIncluded, toReceiptItems } from './postprocess.ts';
+import { reconcile, resolveRates, toReceiptItems } from './postprocess.ts';
 
 const log = getLogger('scanner');
 
@@ -35,9 +35,13 @@ export class OcrLlmReceiptScanner implements ReceiptScanner {
     }
 
     const raw = await this.extractor.extract(ocr.text);
-    const extraction = resolveVatIncluded(raw);
+    const extraction = resolveRates(raw, ocr.text);
     if (extraction !== raw) {
-      log.info(`Set vatIncluded to ${extraction.vatIncluded}, because only that matches the printed total`);
+      const { servicePercent, vatPercent, vatIncluded } = extraction;
+      log.info(
+        `Set servicePercent=${servicePercent} vatPercent=${vatPercent} vatIncluded=${vatIncluded}, ` +
+          'because the model reading did not match the printed total',
+      );
     }
     const items = toReceiptItems(extraction);
     if (items.length === 0) {
