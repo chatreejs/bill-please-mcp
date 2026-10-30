@@ -125,7 +125,7 @@ How the web calls this server, in `../bill-please/src/utils/receipt.util.ts`:
 
 ## Deployment
 
-The target is Docker on the user's own server. The `Dockerfile` uses `oven/bun:1-alpine`, installs production dependencies only, runs as the non-root `bun` user and has a wget healthcheck. There is no docker-compose, because the user never runs Docker locally and Jenkins builds the images. Nobody has run the Docker build yet.
+The app runs in the user's k3s cluster. The `Dockerfile` uses `oven/bun:1-alpine`, installs production dependencies only, runs as the non-root `bun` user and has a wget healthcheck. There is no docker-compose, because the user never runs Docker locally and Jenkins builds the images.
 
 The Jenkins pipeline in `ci/Jenkinsfile` is copied from `../passwords`. Its stages run in this order:
 
@@ -137,7 +137,14 @@ The Jenkins pipeline in `ci/Jenkinsfile` is copied from `../passwords`. Its stag
 
 The manifest repo is `../../gitlab.com/chatreedev-manifest/bill-please-backend`. One Helm chart deploys this server and bill-please-ocr into the `bill-please-backend-{dev,prod}` namespaces, and the ocr pipeline sets `OCR_IMAGE_TAG` on the same gitops jobs. In the cluster, the mcp config points at the in-release OCR service and the shared llm-server.
 
-There is no GitHub Actions CI, by the user's choice.
+- **Dev.** The Argo CD app `bill-please-backend-dev` (namespace `argocd`, the `applications.argoproj.io` resource) auto-syncs `main` of the manifest repo with prune and self-heal. A push to `develop` therefore reaches dev without a manual sync, once Jenkins has built the image and the gitops job has written the tag into `values-dev.yaml`. Dev serves `https://beta.mcp.chatree.dev/bill-please`; a Traefik middleware strips `/bill-please`, so `/health` is at `/bill-please/health`. Dev runs both services at `LOG_LEVEL=DEBUG`.
+- **Prod.** `values-prod.yaml` is for `mcp.chatree.dev`, but there is no prod Argo CD app yet. Going live needs a merge to `main` in both code repos, the release Jenkins builds, a prod Argo CD app and `VITE_APP_BILL_PLEASE_MCP_URL=https://mcp.chatree.dev/bill-please` in the Vercel prod env of bill-please web.
+- **Traffic path.** Cloudflare, then the cloudflared tunnel pod (namespace `cloudflare-tunnel`), then Traefik, then the pod. Traefik replaces `X-Forwarded-For` with the cloudflared pod IP, so with `TRUST_PROXY=true` (the chart default) the app reads `CF-Connecting-IP` first.
+- **Replicas.** mcp runs 1 replica with no HPA in either environment, because each pod keeps its own in-memory rate limiter. Dev had an HPA override until 2026-10-30, and it could not read CPU or memory metrics.
+- **Shutdown.** Both pods sleep 5 s in `preStop` (the Kubernetes `sleep` action, no binary needed), so Traefik stops routing to them before SIGTERM. mcp then lets in-flight scans finish within `terminationGracePeriodSeconds: 75`, which covers the OCR and LLM timeouts (20 s + 45 s), and ocr within 30 s. Without the sleep, a rollout answered 504. With it, a restart under a request every 0.5 s returned 82 of 82 with 200.
+- **LLM.** The cluster's llama.cpp accepts the `grammar` field and `reasoning_effort`, so dev keeps the `LLM_OUTPUT_FORMAT=gbnf` default. On the T400 a 14-item receipt (bill-3) takes about 42 s end to end, close to the web's 60 s Axios timeout.
+
+CI is Jenkins only. SonarQube covers static analysis, so there is no GitHub Actions workflow and no CodeQL. Dependabot updates the Bun dependencies and the Docker base image.
 
 ## Status and roadmap
 
