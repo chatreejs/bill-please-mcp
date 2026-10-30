@@ -10,13 +10,21 @@ const REQUEST_ID_PATTERN = /^[\w-]{1,64}$/;
 // Kubernetes liveness/readiness probes and the Docker HEALTHCHECK (wget)
 const PROBE_USER_AGENT = /^(kube-probe|wget)\//i;
 
-/** Client IP, trusting X-Forwarded-For only behind our own reverse proxy */
+/**
+ * Client IP, trusting proxy headers only behind our own reverse proxy. Traffic comes through
+ * a Cloudflare tunnel, and Traefik replaces X-Forwarded-For with the cloudflared pod IP, so
+ * CF-Connecting-IP, which Cloudflare sets to the visitor IP, comes first.
+ */
 export const clientIp = (
   request: Request,
   server: { requestIP: (request: Request) => { address: string } | null } | null,
   trustProxy: boolean,
 ) =>
-  (trustProxy ? request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() : undefined) ??
+  (trustProxy
+    ? request.headers.get('cf-connecting-ip')?.trim() ||
+      request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+      undefined
+    : undefined) ??
   server?.requestIP(request)?.address ??
   '';
 

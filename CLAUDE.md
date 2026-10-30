@@ -73,7 +73,7 @@ Key points:
   - The access log record has the message `METHOD path status Nms` and the fields `http: { method, path, status, durationMs }`, `clientIp` and `userAgent`. 2xx and 3xx log at INFO, 4xx at WARN and 5xx at ERROR. `/health` from infra probes (User-Agent `kube-probe/*` or `Wget/*`) logs only at DEBUG, and from the web at INFO.
   - `onRequest` resolves the client IP, because Bun can't see the socket after the response.
   - Never log image bytes or secrets. Tests capture output with `configureLogger({ write })`.
-- **Rate limiting.** It uses `elysia-rate-limit` v4. v5 needs Elysia 2, which is still in beta, so stay on Elysia 1.4. The limit is in memory per process and skips `/health`. The client IP comes from `X-Forwarded-For` only when `TRUST_PROXY=true`.
+- **Rate limiting.** It uses `elysia-rate-limit` v4. v5 needs Elysia 2, which is still in beta, so stay on Elysia 1.4. The limit is in memory per process and skips `/health`. When `TRUST_PROXY=true`, the client IP comes from `CF-Connecting-IP`, then the first `X-Forwarded-For` entry. Traffic arrives through a Cloudflare tunnel, and Traefik replaces `X-Forwarded-For` with the cloudflared pod IP, so only `CF-Connecting-IP` has the visitor IP.
 
 ## Contract with bill-please web (keep in sync)
 
@@ -114,7 +114,7 @@ How the web calls this server, in `../bill-please/src/utils/receipt.util.ts`:
 | `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated list. Add the LAN IP origin to test from a phone. `*` matches one part of a hostname, for example `https://bill-please-*-chatreejs-projects.vercel.app` for Vercel previews. |
 | `MAX_IMAGE_BYTES` | 5 MB | |
 | `RATE_LIMIT_PER_MINUTE` | `30` | |
-| `TRUST_PROXY` | | |
+| `TRUST_PROXY` | | `true` behind the Cloudflare tunnel and Traefik, to read `CF-Connecting-IP` and `X-Forwarded-For` |
 | `OCR_URL`, `OCR_TIMEOUT_MS` | `http://localhost:8000`, `20000` | bill-please-ocr |
 | `OCR_MIN_CONFIDENCE` | `0.6` | Mean line confidence below this answers 422 without an LLM call |
 | `LLM_URL`, `LLM_MODEL`, `LLM_TIMEOUT_MS` | `http://localhost:8080/v1`, `qwen3-4b-instruct-2507`, `45000` | Any OpenAI compatible API |
@@ -141,7 +141,7 @@ There is no GitHub Actions CI, by the user's choice.
 
 ## Status and roadmap
 
-Done: REST and MCP endpoints, the OCR and LLM scanner, the zod contract, CORS, rate limiting, JSON logging with request ids, graceful SIGTERM shutdown, tests (40 passing), the Dockerfile and the web integration.
+Done: REST and MCP endpoints, the OCR and LLM scanner, the zod contract, CORS, rate limiting, JSON logging with request ids, graceful SIGTERM shutdown, tests (42 passing), the Dockerfile and the web integration.
 
 Likely next steps:
 

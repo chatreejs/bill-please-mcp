@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'bun:test';
 import { createApp } from '../src/app.ts';
 import { config } from '../src/config.ts';
 import { configureLogger } from '../src/logger.ts';
+import { clientIp } from '../src/request-logger.ts';
 import type { ReceiptScanner } from '../src/scanners/index.ts';
 
 const testConfig = { ...config, rateLimitPerMinute: 1000, maxImageBytes: 1024 };
@@ -120,6 +121,22 @@ describe('request logging', () => {
     await scan(png, createApp(testConfig, broken));
     expect(logs.find((r) => r.msg === 'Receipt scan failed')?.error).toMatchObject({ type: 'Error', message: 'model timeout' });
     expect(await waitForLog((r) => r.level === 'error' && r.http?.status === 502)).toBeDefined();
+  });
+});
+
+describe('clientIp', () => {
+  const server = { requestIP: () => ({ address: '10.42.2.217' }) };
+  const request = (headers: Record<string, string>) => new Request('http://localhost/', { headers });
+
+  it('prefers CF-Connecting-IP, then X-Forwarded-For, behind the proxy', () => {
+    const both = request({ 'cf-connecting-ip': '203.0.113.7', 'x-forwarded-for': '10.42.2.217, 10.42.0.1' });
+    expect(clientIp(both, server, true)).toBe('203.0.113.7');
+    expect(clientIp(request({ 'x-forwarded-for': '198.51.100.2, 10.42.0.1' }), server, true)).toBe('198.51.100.2');
+    expect(clientIp(request({}), server, true)).toBe('10.42.2.217');
+  });
+
+  it('ignores proxy headers when TRUST_PROXY is off', () => {
+    expect(clientIp(request({ 'cf-connecting-ip': '203.0.113.7' }), server, false)).toBe('10.42.2.217');
   });
 });
 

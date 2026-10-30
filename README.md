@@ -96,8 +96,8 @@ docker build -t bill-please-mcp .
 docker run -d -p 3001:3001 --env-file .env bill-please-mcp
 ```
 
-Behind a reverse proxy, set `TRUST_PROXY=true` so rate limiting uses the client IP
-from `X-Forwarded-For`.
+Behind a reverse proxy, set `TRUST_PROXY=true` so rate limiting and the access log use
+the client IP from `CF-Connecting-IP`, or else the first `X-Forwarded-For` entry.
 
 ## MCP tools
 
