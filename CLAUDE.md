@@ -31,8 +31,8 @@ src/
   index.ts            entry point: createApp(config, createScanner(config)).listen()
   app.ts              Elysia app, in order: requestLogger, cors, /health, rateLimit, receipt routes, mcp routes
   config.ts           parses Bun.env into the `config` object
-  logger.ts           Spring Boot style logger: getLogger(name), LOG_LEVEL, logContext (AsyncLocalStorage, like Log4j's MDC)
-  request-logger.ts   Elysia plugin: X-Request-Id, one access log line per request, unhandled errors; clientIp()
+  logger.ts           JSON lines logger: getLogger(name), LOG_LEVEL, logContext (AsyncLocalStorage per request)
+  request-logger.ts   Elysia plugin: X-Request-Id, one access log record per request, unhandled errors; clientIp()
   schemas/receipt.ts  zod contract: ReceiptItemSchema, ReceiptScanResultSchema, SUPPORTED_IMAGE_TYPES
   scanners/
     types.ts          ReceiptScanner interface { scan(image): ReceiptScanResult }, ReceiptImage
@@ -67,9 +67,10 @@ Key points:
 - **MCP transport.** The route uses the SDK's `WebStandardStreamableHTTPServerTransport`, which takes a Request and returns a Response, so it fits Elysia without a community MCP plugin. It runs in stateless mode (`sessionIdGenerator: undefined`, `enableJsonResponse: true`) and creates a fresh `McpServer` and transport per request, closed in `finally`. The route must keep `{ parse: 'none' }`, otherwise Elysia consumes the body before the transport reads it.
 - **MCP tool `scan_receipt`.** Its input is `{ imageBase64, mimeType }` and its `outputSchema` is `ReceiptScanResultSchema.shape`. It returns both `structuredContent` and a JSON `text` content, and has the `readOnlyHint` annotation.
 - **Logging.** Never use `console.*`. Use `const log = getLogger('area.name')` from `src/logger.ts`, which has no dependencies.
-  - The format follows Spring Boot: `<ISO time> <LEVEL> <pid> --- [bill-please-mcp] [<requestId>|main] <logger> : <msg>`. Errors print as `Name: message`, then the stack, then `Caused by:`. Non-Error arguments are JSON-stringified, so each record stays on one line.
+  - Every record is one JSON object on one line: `time` (UTC ISO), `level` (lowercase), `service`, `logger`, `requestId` (only inside a request) and `msg`. Plain object arguments are merged into the record as fields. An Error becomes `error: { type, message, stack, cause }`. Any other argument goes into `args`. If a field can't be serialized, it is written as inspected text, so the record is never lost.
   - The request id comes from `logContext`. `onRequest` sets it with `enterWith`, so it follows async calls without being passed around. The server reuses a valid incoming `X-Request-Id` and always sends it back.
-  - The access log line is `METHOD path status Nms ip=… ua="…"`, with the user agent JSON-quoted, or `-` if missing. 2xx and 3xx log at INFO, 4xx at WARN and 5xx at ERROR. `/health` from infra probes (User-Agent `kube-probe/*` or `Wget/*`) logs only at DEBUG, and from the web at INFO.
+  - A scan logs one INFO record per step, with the numbers in fields: `Received receipt image` or `scan_receipt called` (`image`), `Calling OCR` (`ocr.url`), `OCR complete` (`ocr.lines`, `meanConfidence`, `durationMs` inside the OCR service, `elapsedMs` including the upload), `Calling LLM` (`llm.model`, `outputFormat`, `ocrChars`), `LLM complete` (`llm.elapsedMs`, `promptTokens`, `completionTokens`, `finishReason`), the rate fix when `resolveRates` changes anything (`rates.model`, `rates.resolved`), `Extracted N items` (`total`) and `Scan complete` (`scan.items`, `scan.elapsedMs`).
+  - The access log record has the message `METHOD path status Nms` and the fields `http: { method, path, status, durationMs }`, `clientIp` and `userAgent`. 2xx and 3xx log at INFO, 4xx at WARN and 5xx at ERROR. `/health` from infra probes (User-Agent `kube-probe/*` or `Wget/*`) logs only at DEBUG, and from the web at INFO.
   - `onRequest` resolves the client IP, because Bun can't see the socket after the response.
   - Never log image bytes or secrets. Tests capture output with `configureLogger({ write })`.
 - **Rate limiting.** It uses `elysia-rate-limit` v4. v5 needs Elysia 2, which is still in beta, so stay on Elysia 1.4. The limit is in memory per process and skips `/health`. The client IP comes from `X-Forwarded-For` only when `TRUST_PROXY=true`.
@@ -140,7 +141,7 @@ There is no GitHub Actions CI, by the user's choice.
 
 ## Status and roadmap
 
-Done: REST and MCP endpoints, the OCR and LLM scanner, the zod contract, CORS, rate limiting, Spring Boot style logging with request ids, graceful SIGTERM shutdown, tests (39 passing), the Dockerfile and the web integration.
+Done: REST and MCP endpoints, the OCR and LLM scanner, the zod contract, CORS, rate limiting, JSON logging with request ids, graceful SIGTERM shutdown, tests (40 passing), the Dockerfile and the web integration.
 
 Likely next steps:
 

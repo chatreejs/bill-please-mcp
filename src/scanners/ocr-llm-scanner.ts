@@ -3,7 +3,7 @@ import type { ReceiptScanResult } from '../schemas/receipt.ts';
 import { UnreadableReceiptError } from './errors.ts';
 import type { ReceiptImage, ReceiptScanner } from './types.ts';
 import type { ReceiptExtractor } from './llm-client.ts';
-import type { OcrClient } from './ocr-client.ts';
+import { meanConfidence, type OcrClient } from './ocr-client.ts';
 import { reconcile, resolveRates, toReceiptItems } from './postprocess.ts';
 
 const log = getLogger('scanner');
@@ -21,16 +21,11 @@ export class OcrLlmReceiptScanner implements ReceiptScanner {
 
   async scan(image: ReceiptImage): Promise<ReceiptScanResult> {
     const ocr = await this.ocr.recognize(image);
-    const meanConfidence = ocr.lines.length
-      ? ocr.lines.reduce((sum, line) => sum + line.confidence, 0) / ocr.lines.length
-      : 0;
-    log.info(
-      `OCR read ${ocr.lines.length} lines in ${ocr.durationMs}ms, mean confidence ${meanConfidence.toFixed(2)}`,
-    );
+    const confidence = meanConfidence(ocr.lines);
     // Skip the LLM call, which costs 10 s or more, when there is nothing to read
-    if (ocr.lines.length === 0 || meanConfidence < this.minMeanConfidence) {
+    if (ocr.lines.length === 0 || confidence < this.minMeanConfidence) {
       throw new UnreadableReceiptError(
-        `OCR found ${ocr.lines.length} lines with mean confidence ${meanConfidence.toFixed(2)}`,
+        `OCR found ${ocr.lines.length} lines with mean confidence ${confidence.toFixed(2)}`,
       );
     }
 
@@ -41,6 +36,12 @@ export class OcrLlmReceiptScanner implements ReceiptScanner {
       log.info(
         `Set servicePercent=${servicePercent} vatPercent=${vatPercent} vatIncluded=${vatIncluded}, ` +
           'because the model reading did not match the printed total',
+        {
+          rates: {
+            model: { servicePercent: raw.servicePercent, vatPercent: raw.vatPercent, vatIncluded: raw.vatIncluded },
+            resolved: { servicePercent, vatPercent, vatIncluded },
+          },
+        },
       );
     }
     const items = toReceiptItems(extraction);
@@ -49,14 +50,16 @@ export class OcrLlmReceiptScanner implements ReceiptScanner {
     }
 
     const check = reconcile(items, extraction.total);
+    const fields = { total: { items: items.length, ...check } };
     if (check.printedTotal === null) {
-      log.warn(`Extracted ${items.length} items, total ${check.computedTotal}, but found no printed total to check`);
+      log.warn(`Extracted ${items.length} items, total ${check.computedTotal}, but found no printed total to check`, fields);
     } else if (check.matches) {
-      log.info(`Extracted ${items.length} items, total ${check.computedTotal} (printed ${check.printedTotal})`);
+      log.info(`Extracted ${items.length} items, total ${check.computedTotal} (printed ${check.printedTotal})`, fields);
     } else {
       log.warn(
         `Extracted ${items.length} items, but they add up to ${check.computedTotal} ` +
           `while the receipt says ${check.printedTotal}`,
+        fields,
       );
     }
     return { items };

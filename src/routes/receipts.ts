@@ -26,13 +26,11 @@ export const receiptRoutes = (config: Config, scanner: ReceiptScanner) =>
       }
 
       try {
-        log.debug(`Scanning ${image.type} image of ${image.size} bytes`);
-        const result = await scanReceiptImage(scanner, {
+        log.info('Received receipt image', { image: { mimeType: image.type, bytes: image.size } });
+        return await scanReceiptImage(scanner, {
           data: new Uint8Array(await image.arrayBuffer()),
           mimeType: image.type,
         });
-        log.info(`Scanned receipt with ${result.items.length} items`);
-        return result;
       } catch (error) {
         if (error instanceof UnreadableReceiptError) {
           log.warn(`Receipt unreadable: ${error.message}`);

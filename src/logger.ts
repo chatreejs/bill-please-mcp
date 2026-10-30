@@ -1,12 +1,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 /**
- * Minimal Log4j / Spring Boot style logger.
- *
- * Output follows Spring Boot's default console pattern:
- *   2026-10-11T14:03:12.345+07:00  INFO 4242 --- [bill-please-mcp] [9f2c1a7e] receipts.route : Scanned 4 items
- * The "thread" slot shows the current request id (like an MDC value), or
- * `main` outside a request.
+ * Minimal JSON logger. Every record is one JSON object on one line:
+ *   {"time":"2026-10-30T14:03:12.345Z","level":"info","service":"bill-please-mcp","logger":"receipts.route","requestId":"9f2c1a7e","msg":"Scanned receipt with 4 items"}
+ * Plain object arguments become fields of the record, and an Error becomes the `error` field.
  */
 
 export const LOG_LEVELS = ['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'OFF'] as const;
@@ -21,24 +18,10 @@ const SEVERITY: Record<LogLevel, number> = {
   OFF: 5,
 };
 
-const LEVEL_COLOR: Record<LogLevel, string> = {
-  TRACE: '\x1b[37m',
-  DEBUG: '\x1b[32m',
-  INFO: '\x1b[32m',
-  WARN: '\x1b[33m',
-  ERROR: '\x1b[31m',
-  OFF: '',
-};
-const RESET = '\x1b[0m';
-const FAINT = '\x1b[2m';
-const CYAN = '\x1b[36m';
-const MAGENTA = '\x1b[35m';
-
 export interface LoggerOptions {
   level: LogLevel;
-  appName: string;
-  color: boolean;
-  /** Where formatted lines go; defaults to stdout/stderr */
+  service: string;
+  /** Where JSON lines go; defaults to stdout/stderr */
   write: (line: string, level: LogLevel) => void;
 }
 
@@ -49,8 +32,7 @@ const defaultWrite = (line: string, level: LogLevel) => {
 
 const options: LoggerOptions = {
   level: 'INFO',
-  appName: 'bill-please-mcp',
-  color: process.stdout.isTTY === true && !Bun.env.NO_COLOR,
+  service: 'bill-please-mcp',
   write: defaultWrite,
 };
 
@@ -63,7 +45,7 @@ export const parseLogLevel = (value: string | undefined, fallback: LogLevel = 'I
   return (LOG_LEVELS as readonly string[]).includes(upper ?? '') ? (upper as LogLevel) : fallback;
 };
 
-/** Per-request context, the equivalent of Log4j's MDC */
+/** Per-request context, added to every record logged during the request */
 export interface LogContext {
   requestId: string;
   startedAt: number;
@@ -72,36 +54,29 @@ export interface LogContext {
 
 export const logContext = new AsyncLocalStorage<LogContext>();
 
-const pad = (value: number, length = 2) => String(value).padStart(length, '0');
+export interface SerializedError {
+  type: string;
+  message: string;
+  stack?: string;
+  cause?: SerializedError;
+}
 
-/** ISO-8601 local time with offset, e.g. 2026-10-11T14:03:12.345+07:00 */
-export const formatTimestamp = (date: Date) => {
-  const offset = -date.getTimezoneOffset();
-  const sign = offset >= 0 ? '+' : '-';
-  const abs = Math.abs(offset);
-  return (
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
-    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}` +
-    `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
-  );
-};
+const serializeError = (error: Error): SerializedError => ({
+  type: error.name,
+  message: error.message,
+  ...(error.stack ? { stack: error.stack } : {}),
+  ...(error.cause instanceof Error ? { cause: serializeError(error.cause) } : {}),
+});
 
-/** `Name: message` followed by the stack frames and causes, like a Java stack trace */
-const formatError = (error: Error): string => {
-  const frames = (error.stack ?? '').split('\n').filter((line) => line.trimStart().startsWith('at '));
-  const lines = [`${error.name}: ${error.message}`, ...frames];
-  if (error.cause instanceof Error) lines.push(`Caused by: ${formatError(error.cause)}`);
-  return lines.join('\n');
-};
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && Object.getPrototypeOf(value) === Object.prototype;
 
-const formatArg = (arg: unknown) => {
-  if (arg instanceof Error) return formatError(arg);
-  if (typeof arg === 'string') return arg;
-  // Keep log records on one line
+const stringify = (base: Record<string, unknown>, fields: Record<string, unknown>) => {
   try {
-    return JSON.stringify(arg) ?? String(arg);
+    return JSON.stringify({ ...base, ...fields });
   } catch {
-    return Bun.inspect(arg, { depth: 2 }).replace(/\s*\n\s*/g, ' ');
+    // Circular or BigInt fields: keep the record and inspect the fields as text
+    return JSON.stringify({ ...base, fields: Bun.inspect(fields, { depth: 2 }).replace(/\s*\n\s*/g, ' ') });
   }
 };
 
@@ -114,7 +89,6 @@ export interface Logger {
   isEnabled: (level: LogLevel) => boolean;
 }
 
-/** Get a named logger, like `LoggerFactory.getLogger(Foo.class)` */
 export const getLogger = (name: string): Logger => {
   const isEnabled = (level: LogLevel) =>
     level !== 'OFF' && SEVERITY[level] >= SEVERITY[options.level];
@@ -124,22 +98,27 @@ export const getLogger = (name: string): Logger => {
     (message: string, ...args: unknown[]) => {
       if (!isEnabled(level)) return;
 
-      const thread = logContext.getStore()?.requestId ?? 'main';
-      // Errors go on the following lines like a Java stack trace
-      const errors = args.filter((arg) => arg instanceof Error);
-      const extras = args.filter((arg) => !(arg instanceof Error)).map(formatArg);
-      const text = [message, ...extras].join(' ');
-
-      const c = options.color;
-      const line =
-        `${c ? FAINT : ''}${formatTimestamp(new Date())}${c ? RESET : ''} ` +
-        `${c ? LEVEL_COLOR[level] : ''}${level.padStart(5)}${c ? RESET : ''} ` +
-        `${c ? MAGENTA : ''}${process.pid}${c ? RESET : ''} ` +
-        `${c ? FAINT : ''}--- [${options.appName}] [${thread.padStart(8)}]${c ? RESET : ''} ` +
-        `${c ? CYAN : ''}${name.padEnd(16)}${c ? RESET : ''} : ${text}`;
+      const requestId = logContext.getStore()?.requestId;
+      const fields: Record<string, unknown> = {};
+      const extras: unknown[] = [];
+      for (const arg of args) {
+        if (arg instanceof Error) fields.error = serializeError(arg);
+        else if (isPlainObject(arg)) Object.assign(fields, arg);
+        else extras.push(arg);
+      }
 
       options.write(
-        [line, ...errors.map(formatArg)].join('\n'),
+        stringify(
+          {
+            time: new Date().toISOString(),
+            level: level.toLowerCase(),
+            service: options.service,
+            logger: name,
+            ...(requestId ? { requestId } : {}),
+            msg: message,
+          },
+          { ...fields, ...(extras.length ? { args: extras } : {}) },
+        ),
         level,
       );
     };

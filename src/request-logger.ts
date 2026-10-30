@@ -23,7 +23,7 @@ export const clientIp = (
 /**
  * Assigns every request an id (reusing a sane incoming `X-Request-Id`), exposes
  * it to all loggers via `logContext`, echoes it back in the response header and
- * writes one access log line per request.
+ * writes one access log record per request.
  */
 export const requestLogger = (config: Config) =>
   new Elysia({ name: 'request-logger' })
@@ -51,13 +51,17 @@ export const requestLogger = (config: Config) =>
         responseValue instanceof Response ? responseValue.status : Number(set.status ?? 200);
       const duration = context ? Math.round(performance.now() - context.startedAt) : 0;
       const userAgent = request.headers.get('user-agent') ?? '';
-      // JSON-quoted: user agents contain spaces and must not break the single line
-      const line = `${request.method} ${path} ${status} ${duration}ms ip=${context?.clientIp || '-'} ua=${userAgent ? JSON.stringify(userAgent) : '-'}`;
+      const message = `${request.method} ${path} ${status} ${duration}ms`;
+      const fields = {
+        http: { method: request.method, path, status, durationMs: duration },
+        clientIp: context?.clientIp || undefined,
+        userAgent: userAgent || undefined,
+      };
 
       // Infra probes hit /health every few seconds; web client polls stay visible
       const isProbe = PROBE_USER_AGENT.test(userAgent);
-      if (path === '/health' && status < 400 && isProbe) log.debug(line);
-      else if (status >= 500) log.error(line);
-      else if (status >= 400) log.warn(line);
-      else log.info(line);
+      if (path === '/health' && status < 400 && isProbe) log.debug(message, fields);
+      else if (status >= 500) log.error(message, fields);
+      else if (status >= 400) log.warn(message, fields);
+      else log.info(message, fields);
     });

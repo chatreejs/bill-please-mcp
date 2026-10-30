@@ -72,13 +72,13 @@ To replace the scanner, implement the `ReceiptScanner` interface in
 
 ## Logging
 
-Logs use Spring Boot's console format, with the request id in place of the
-thread name:
+Logs are JSON lines, one object per record, for Loki or any log collector:
 
-```text
-2026-10-11T17:34:02.182+07:00  INFO 25352 --- [bill-please-mcp] [ web-123] receipts.route   : Scanned receipt with 4 items
-2026-10-11T17:34:02.183+07:00  INFO 25352 --- [bill-please-mcp] [ web-123] http.access      : POST /api/receipts/scan 200 121ms ip=::1
+```json
+{"time":"2026-10-30T15:34:11.908Z","level":"info","service":"bill-please-mcp","logger":"http.access","requestId":"982c4a53","msg":"GET /health 200 3ms","http":{"method":"GET","path":"/health","status":200,"durationMs":3},"clientIp":"::1","userAgent":"Mozilla/5.0"}
 ```
+
+An error is logged as an `error` field with `type`, `message`, `stack` and `cause`.
 
 `LOG_LEVEL` sets the level to `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR` or `OFF`.
 The default is `INFO`. Every response has an `X-Request-Id` header. Send your own

@@ -50,9 +50,8 @@ export const createMcpServer = (config: Config, scanner: ReceiptScanner) => {
       }
 
       try {
-        log.debug(`scan_receipt called with ${mimeType} image of ${data.length} bytes`);
+        log.info('scan_receipt called', { image: { mimeType, bytes: data.length } });
         const result = await scanReceiptImage(scanner, { data, mimeType });
-        log.info(`scan_receipt returned ${result.items.length} items`);
         return {
           structuredContent: result,
           content: [{ type: 'text', text: JSON.stringify(result) }],

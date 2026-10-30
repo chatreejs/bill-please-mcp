@@ -16,6 +16,9 @@ const OcrResultSchema = z.object({
 
 export type OcrResult = z.infer<typeof OcrResultSchema>;
 
+export const meanConfidence = (lines: OcrResult['lines']) =>
+  lines.length ? lines.reduce((sum, line) => sum + line.confidence, 0) / lines.length : 0;
+
 export interface OcrClient {
   recognize(image: ReceiptImage): Promise<OcrResult>;
 }
@@ -32,6 +35,8 @@ export class HttpOcrClient implements OcrClient {
     form.append('image', new Blob([image.data], { type: image.mimeType }), 'receipt');
 
     const requestId = logContext.getStore()?.requestId;
+    const startedAt = performance.now();
+    log.info('Calling OCR', { ocr: { url: this.url, bytes: image.data.length } });
     const res = await fetch(`${this.url}/v1/ocr`, {
       method: 'POST',
       body: form,
@@ -47,7 +52,16 @@ export class HttpOcrClient implements OcrClient {
     }
 
     const result = OcrResultSchema.parse(await res.json());
-    log.debug(`OCR found ${result.lines.length} lines in ${result.durationMs}ms`);
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    log.info(`OCR complete with ${result.lines.length} lines in ${elapsedMs}ms`, {
+      ocr: {
+        lines: result.lines.length,
+        meanConfidence: Math.round(meanConfidence(result.lines) * 100) / 100,
+        // durationMs is the time inside the OCR service, elapsedMs includes the upload
+        durationMs: result.durationMs,
+        elapsedMs,
+      },
+    });
     return result;
   }
 }

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { createApp } from '../src/app.ts';
+import { createScanner, scanReceiptImage } from '../src/scanners/index.ts';
 import { config } from '../src/config.ts';
 import { configureLogger } from '../src/logger.ts';
 import { UnreadableReceiptError } from '../src/scanners/errors.ts';
@@ -14,7 +15,7 @@ import { reconcile, resolveRates, toReceiptItems } from '../src/scanners/postpro
 let logs: string[] = [];
 beforeEach(() => {
   logs = [];
-  configureLogger({ level: 'INFO', color: false, write: (line) => logs.push(line) });
+  configureLogger({ level: 'INFO', write: (line) => logs.push(line) });
 });
 
 const RECEIPT_TEXT = [
@@ -226,6 +227,38 @@ describe('OpenAiCompatibleExtractor', () => {
   });
 });
 
+describe('scan step logs', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('logs each step of a scan with its fields', async () => {
+    globalThis.fetch = (async (url: string) =>
+      String(url).endsWith('/v1/ocr')
+        ? Response.json({ ...ocrResult(RECEIPT_TEXT), durationMs: 5 })
+        : Response.json({
+            choices: [{ message: { content: JSON.stringify(extraction) }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 700, completion_tokens: 40 },
+          })) as unknown as typeof fetch;
+
+    await scanReceiptImage(createScanner(config), image);
+    const records = logs.map((line) => JSON.parse(line));
+    expect(records.map((r) => r.msg.split(/ \d| with| in /)[0])).toEqual([
+      'Calling OCR',
+      'OCR complete',
+      `Calling LLM ${config.llmModel}`,
+      'LLM complete',
+      'Extracted',
+      'Scan complete',
+    ]);
+    expect(records[1].ocr).toMatchObject({ lines: 5, meanConfidence: 0.95, durationMs: 5 });
+    expect(records[3].llm).toMatchObject({ promptTokens: 700, completionTokens: 40, finishReason: 'stop' });
+    expect(records[4].total).toMatchObject({ items: 2, computedTotal: 164.78, matches: true });
+    expect(records[5].scan).toMatchObject({ items: 2 });
+  });
+});
+
 describe('OcrLlmReceiptScanner', () => {
   it('sends the OCR text to the extractor and returns contract items', async () => {
     const extractor = new StubExtractor(extraction);
@@ -244,7 +277,7 @@ describe('OcrLlmReceiptScanner', () => {
       0.6,
     );
     await scanner.scan(image);
-    expect(logs.find((line) => line.includes('the receipt says 999'))).toContain('WARN');
+    expect(logs.find((line) => line.includes('the receipt says 999'))).toContain('"level":"warn"');
   });
 
   it('fixes the rates from the printed total and warns when there is none', async () => {
@@ -262,7 +295,7 @@ describe('OcrLlmReceiptScanner', () => {
       0.6,
     );
     await unchecked.scan(image);
-    expect(logs.find((line) => line.includes('found no printed total'))).toContain('WARN');
+    expect(logs.find((line) => line.includes('found no printed total'))).toContain('"level":"warn"');
   });
 
   it('skips the LLM when OCR finds nothing or is unsure', async () => {

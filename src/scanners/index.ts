@@ -34,8 +34,10 @@ export const scanReceiptImage = async (
   image: ReceiptImage,
 ): Promise<ReceiptScanResult> => {
   const startedAt = performance.now();
-  const result = await scanner.scan(image);
-  log.debug(`${scanner.constructor.name} finished in ${Math.round(performance.now() - startedAt)}ms`);
-
-  return ReceiptScanResultSchema.parse(result);
+  const result = ReceiptScanResultSchema.parse(await scanner.scan(image));
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  log.info(`Scan complete with ${result.items.length} items in ${elapsedMs}ms`, {
+    scan: { items: result.items.length, elapsedMs },
+  });
+  return result;
 };

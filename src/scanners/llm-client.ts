@@ -36,6 +36,9 @@ export class OpenAiCompatibleExtractor implements ReceiptExtractor {
 
   async extract(ocrText: string): Promise<Extraction> {
     const startedAt = performance.now();
+    log.info(`Calling LLM ${this.model}`, {
+      llm: { url: this.url, model: this.model, outputFormat: this.options.outputFormat ?? 'json_schema', ocrChars: ocrText.length },
+    });
     const res = await fetch(`${this.url}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -68,10 +71,16 @@ export class OpenAiCompatibleExtractor implements ReceiptExtractor {
 
     const completion = ChatCompletionSchema.parse(await res.json());
     const choice = completion.choices[0]!;
-    const tokens = completion.usage
-      ? ` prompt=${completion.usage.prompt_tokens} completion=${completion.usage.completion_tokens} tokens`
-      : '';
-    log.info(`${this.model} answered in ${Math.round(performance.now() - startedAt)}ms${tokens}`);
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    log.info(`LLM complete in ${elapsedMs}ms`, {
+      llm: {
+        model: this.model,
+        elapsedMs,
+        promptTokens: completion.usage?.prompt_tokens,
+        completionTokens: completion.usage?.completion_tokens,
+        finishReason: choice.finish_reason ?? undefined,
+      },
+    });
     if (choice.finish_reason === 'length') {
       throw new Error('LLM output was cut off at max_tokens');
     }

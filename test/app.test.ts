@@ -13,16 +13,17 @@ const app = createApp(testConfig, stubScanner);
 const png = new File([new Uint8Array([137, 80, 78, 71])], 'bill.png', { type: 'image/png' });
 
 // Capture log output instead of printing it
-let logs: string[] = [];
+type LogRecord = Record<string, any>;
+let logs: LogRecord[] = [];
 beforeEach(() => {
   logs = [];
-  configureLogger({ level: 'INFO', color: false, write: (line) => logs.push(line) });
+  configureLogger({ level: 'INFO', write: (line) => logs.push(JSON.parse(line)) });
 });
 
 // The access log is written after the response has been sent
-const waitForLog = async (pattern: RegExp) => {
-  for (let i = 0; i < 50 && !logs.some((line) => pattern.test(line)); i++) await Bun.sleep(1);
-  return logs.find((line) => pattern.test(line));
+const waitForLog = async (match: (record: LogRecord) => boolean) => {
+  for (let i = 0; i < 50 && !logs.some(match); i++) await Bun.sleep(1);
+  return logs.find(match);
 };
 
 const scan = (file: File, target = app) => {
@@ -73,14 +74,14 @@ describe('REST /api/receipts/scan', () => {
 });
 
 describe('request logging', () => {
-  it('assigns a request id and writes an access log line', async () => {
+  it('assigns a request id and writes an access log record', async () => {
     const res = await scan(png);
     const requestId = res.headers.get('x-request-id');
     expect(requestId).toMatch(/^[0-9a-f]{8}$/);
 
-    const line = await waitForLog(new RegExp(`\\[${requestId}\\] http\\.access`));
-    expect(line).toContain('POST /api/receipts/scan 200');
-    expect(logs.some((l) => l.includes(`[${requestId}] receipts.route`))).toBe(true);
+    const record = await waitForLog((r) => r.requestId === requestId && r.logger === 'http.access');
+    expect(record?.http).toMatchObject({ method: 'POST', path: '/api/receipts/scan', status: 200 });
+    expect(logs.some((r) => r.requestId === requestId && r.logger === 'receipts.route')).toBe(true);
   });
 
   it('reuses a valid incoming X-Request-Id', async () => {
@@ -104,10 +105,10 @@ describe('request logging', () => {
     const probe = await health('kube-probe/1.31');
     const web = await health('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)');
 
-    const line = await waitForLog(new RegExp(`\\[${web.headers.get('x-request-id')}\\] http\\.access`));
-    expect(line).toContain('INFO');
-    expect(line).toContain('ua="Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)"');
-    expect(logs.some((l) => l.includes(`[${probe.headers.get('x-request-id')}]`))).toBe(false);
+    const record = await waitForLog((r) => r.requestId === web.headers.get('x-request-id'));
+    expect(record?.level).toBe('info');
+    expect(record?.userAgent).toBe('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)');
+    expect(logs.some((r) => r.requestId === probe.headers.get('x-request-id'))).toBe(false);
   });
 
   it('logs scanner failures with the error', async () => {
@@ -117,8 +118,8 @@ describe('request logging', () => {
       },
     };
     await scan(png, createApp(testConfig, broken));
-    expect(logs.find((l) => l.includes('Receipt scan failed'))).toContain('Error: model timeout');
-    expect(await waitForLog(/ERROR .*POST \/api\/receipts\/scan 502/)).toBeDefined();
+    expect(logs.find((r) => r.msg === 'Receipt scan failed')?.error).toMatchObject({ type: 'Error', message: 'model timeout' });
+    expect(await waitForLog((r) => r.level === 'error' && r.http?.status === 502)).toBeDefined();
   });
 });
 
